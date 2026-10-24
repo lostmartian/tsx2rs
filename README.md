@@ -26,6 +26,11 @@ Measured on a real app (Vercel Commerce, hand-compiled prototype, Google Cloud `
 | `packages/` | npm: `@tsx2rs/adapter`, `@tsx2rs/runtime`, `@tsx2rs/native` |
 | `tests/` | identity tests against Next.js, fixtures, the Commerce app |
 | `bench/` | benchmarks |
+| `docs/` | decision records (`adr/`), engineering standards, user docs |
+
+## Contributing
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md), [ARCHITECTURE.md](ARCHITECTURE.md), the [code standards](docs/engineering/code-standards.md), the [testing strategy](docs/engineering/testing.md) and the [decision records](docs/adr/).
 
 ## License
 
