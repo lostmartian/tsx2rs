@@ -1,6 +1,6 @@
 # tsx2rs
 
-**Make Next.js cheap to self-host.** tsx2rs is a Next.js [Deployment Adapter](https://nextjs.org/docs/app/api-reference/config/next-config-js/adapterPath) that compiles your React server component templates into programs run by a native Rust engine. Client components are served from an HTML cache, and anything it can't compile falls back to Next.js unchanged. No code changes and no Rust toolchain needed: add one line to `next.config`.
+**Make Next.js cheap to self-host.** tsx2rs is a Next.js Deployment Adapter that compiles your React server component templates into programs run by a native Rust engine. Client components are served from an HTML cache, and anything it can't compile falls back to Next.js unchanged. No code changes and no Rust toolchain needed: add one line to `next.config`.
 
 > **Status: early development (Phase 1, milestone 1).** Not usable yet.
 
