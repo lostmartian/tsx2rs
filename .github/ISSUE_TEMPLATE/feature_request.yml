@@ -1,0 +1,16 @@
+name: Feature request
+description: A construct or Next.js feature that should compile instead of falling back
+labels: [enhancement]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What should compile
+      description: The code pattern, and the fallback reason tsx2rs reports today.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it matters
+      description: How common it is in your app, and the routes it affects.
