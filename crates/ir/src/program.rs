@@ -12,6 +12,7 @@
 //! can run any `Program` without bounds or structure checks failing at render time.
 
 use crate::FormatError;
+use crate::attribute::{ElementRules, Kind};
 
 /// Index into a program's chunk table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -43,16 +44,28 @@ pub enum Op {
     Text,
     /// Reads a number: HTML text as JavaScript's `String(n)`, a Flight number.
     Number,
-    /// Reads an optional string: an HTML attribute ` name="value"` if it is a string (nothing for
-    /// `undefined` or `null`); in Flight the value (`"…"`, `null` or `"$undefined"`).
-    Attribute {
+    /// Reads a prop's value (a primitive): in HTML the attribute ` name="value"`, written by
+    /// React DOM's rules for its [`Kind`] (or nothing); in Flight the value. The compiler gets
+    /// `name` and `kind` from [`crate::attribute::classify`].
+    Prop {
         /// The attribute name as written in HTML (`class`, `href`, `data-x`).
         name: ChunkId,
+        /// How the value is written.
+        kind: Kind,
     },
-    /// Reads an optional boolean: the HTML attribute ` name=""` if true; in Flight the value.
-    BooleanAttribute {
-        /// The attribute name as written in HTML (`disabled`, `readonly`).
-        name: ChunkId,
+    /// Reads a props object whose names are known only at runtime (`{...props}` on a host
+    /// element, ADR-0005): every prop, classified and written by React DOM's rules for `rules`
+    /// ([`crate::attribute::classify`]); in Flight the props as `"name":value` pairs, separated
+    /// by commas.
+    ///
+    /// The object holds every prop of the element except its content (`children`,
+    /// `dangerouslySetInnerHTML`), which the template writes after it.
+    Attributes {
+        /// Whose prop rules apply.
+        rules: ElementRules,
+        /// Write a comma after the last pair (when there is one), because more props follow in
+        /// Flight.
+        comma_after: bool,
     },
     /// Reads a string: raw HTML (`dangerouslySetInnerHTML`, not escaped); in Flight a JSON string.
     RawHtml,
@@ -165,7 +178,7 @@ fn validate(chunks: &[Box<[u8]>], ops: &[Op]) -> Result<(), FormatError> {
                 chunk_in_range(html, at)?;
                 chunk_in_range(flight, at)?;
             }
-            Op::Attribute { name } | Op::BooleanAttribute { name } => chunk_in_range(name, at)?,
+            Op::Prop { name, .. } => chunk_in_range(name, at)?,
             Op::Loop { end, separator } => {
                 if let Some(separator) = separator {
                     chunk_in_range(separator, at)?;
@@ -207,7 +220,13 @@ fn validate(chunks: &[Box<[u8]>], ops: &[Op]) -> Result<(), FormatError> {
                     });
                 }
             }
-            Op::Text | Op::Number | Op::RawHtml | Op::Value | Op::Child | Op::Island => {}
+            Op::Text
+            | Op::Number
+            | Op::Attributes { .. }
+            | Op::RawHtml
+            | Op::Value
+            | Op::Child
+            | Op::Island => {}
         }
     }
     if let Some(&(start, _)) = loops.last() {

@@ -9,11 +9,13 @@
 //! ```
 //!
 //! Opcodes and operands: 0 `Static` (html, flight, then one flags byte: bit 0 `text_start`,
-//! bit 1 `text_end`), 1 `Text`, 2 `Number`, 3 `Attribute` (name), 4 `BooleanAttribute` (name), 5 `RawHtml`,
-//! 6 `Value`, 7 `Island`, 8 `Loop` (end, separator + 1 or 0 for none), 9 `EndLoop`, 10 `If`
-//! (else), 11 `Jump` (to), 12 `Child`. Decoding validates the program ([`Program::new`]), and encoding is
+//! bit 1 `text_end`), 1 `Text`, 2 `Number`, 3 `Prop` (name, then a [`Kind`] byte),
+//! 4 `Attributes` (an [`ElementRules`] byte, then a flags byte: bit 0 `comma_after`), 5
+//! `RawHtml`, 6 `Value`, 7 `Island`, 8 `Loop` (end, separator + 1 or 0 for none), 9 `EndLoop`,
+//! 10 `If` (else), 11 `Jump` (to), 12 `Child`. Decoding validates the program ([`Program::new`]), and encoding is
 //! deterministic.
 
+use crate::attribute::{ElementRules, Kind};
 use crate::{ChunkId, FormatError, Op, OpIndex, PROGRAM_FORMAT_VERSION, Program};
 
 /// The first bytes of every program file.
@@ -22,8 +24,8 @@ pub const MAGIC: &[u8; 8] = b"TSX2RSP\0";
 const STATIC: u8 = 0;
 const TEXT: u8 = 1;
 const NUMBER: u8 = 2;
-const ATTRIBUTE: u8 = 3;
-const BOOLEAN_ATTRIBUTE: u8 = 4;
+const PROP: u8 = 3;
+const ATTRIBUTES: u8 = 4;
 const RAW_HTML: u8 = 5;
 const VALUE: u8 = 6;
 const ISLAND: u8 = 7;
@@ -64,13 +66,15 @@ impl Program {
                 }
                 Op::Text => out.push(TEXT),
                 Op::Number => out.push(NUMBER),
-                Op::Attribute { name } => {
-                    out.push(ATTRIBUTE);
+                Op::Prop { name, kind } => {
+                    out.push(PROP);
                     out.extend_from_slice(&name.0.to_le_bytes());
+                    out.push(kind.to_byte());
                 }
-                Op::BooleanAttribute { name } => {
-                    out.push(BOOLEAN_ATTRIBUTE);
-                    out.extend_from_slice(&name.0.to_le_bytes());
+                Op::Attributes { rules, comma_after } => {
+                    out.push(ATTRIBUTES);
+                    out.push(rules.to_byte());
+                    out.push(u8::from(comma_after));
                 }
                 Op::RawHtml => out.push(RAW_HTML),
                 Op::Value => out.push(VALUE),
@@ -141,12 +145,28 @@ impl Program {
                 }
                 TEXT => Op::Text,
                 NUMBER => Op::Number,
-                ATTRIBUTE => Op::Attribute {
-                    name: ChunkId(r.u32()?),
-                },
-                BOOLEAN_ATTRIBUTE => Op::BooleanAttribute {
-                    name: ChunkId(r.u32()?),
-                },
+                PROP => {
+                    let name = ChunkId(r.u32()?);
+                    let bad = FormatError::BadOpcode {
+                        offset: at,
+                        opcode: PROP,
+                    };
+                    let kind = Kind::from_byte(r.u8()?).ok_or(bad)?;
+                    Op::Prop { name, kind }
+                }
+                ATTRIBUTES => {
+                    let bad = FormatError::BadOpcode {
+                        offset: at,
+                        opcode: ATTRIBUTES,
+                    };
+                    let rules = ElementRules::from_byte(r.u8()?).ok_or(bad.clone())?;
+                    let comma_after = match r.u8()? {
+                        0 => false,
+                        1 => true,
+                        _ => return Err(bad),
+                    };
+                    Op::Attributes { rules, comma_after }
+                }
                 RAW_HTML => Op::RawHtml,
                 VALUE => Op::Value,
                 CHILD => Op::Child,

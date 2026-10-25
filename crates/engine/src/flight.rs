@@ -2,6 +2,8 @@
 //! values: `JSON.stringify` plus React's own encodings for strings starting with `$`,
 //! `undefined` and special numbers.
 
+use crate::input::Primitive;
+
 /// Writes a string value: React's `escapeStringValue` (a leading `$` becomes `$$`), then
 /// `JSON.stringify`.
 pub(crate) fn string(out: &mut Vec<u8>, s: &str) {
@@ -75,6 +77,18 @@ pub(crate) fn bigint(out: &mut Vec<u8>, digits: &str) {
     out.extend_from_slice(b"\"$n");
     out.extend_from_slice(digits.as_bytes()); // digits and `-` need no JSON escaping
     out.push(b'"');
+}
+
+/// Writes a primitive value as React's Flight server serializes it.
+pub(crate) fn primitive(out: &mut Vec<u8>, value: Primitive<'_>) {
+    match value {
+        Primitive::Undefined => out.extend_from_slice(UNDEFINED),
+        Primitive::Null => out.extend_from_slice(b"null"),
+        Primitive::Bool(b) => out.extend_from_slice(if b { b"true" } else { b"false" }),
+        Primitive::Number(n) => number(out, n),
+        Primitive::String(s) => string(out, s),
+        Primitive::BigInt(digits) => bigint(out, digits),
+    }
 }
 
 /// `undefined`, as React encodes it.

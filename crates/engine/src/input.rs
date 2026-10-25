@@ -9,11 +9,16 @@ pub(crate) struct Input<'a> {
     at: usize,
 }
 
-/// An optional value as `Attribute` / `BooleanAttribute` read it.
-pub(crate) enum Optional<T> {
+/// A primitive JavaScript value, as props and children carry them.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Primitive<'a> {
     Undefined,
     Null,
-    Some(T),
+    Bool(bool),
+    Number(f64),
+    String(&'a str),
+    /// A bigint's canonical decimal digits.
+    BigInt(&'a str),
 }
 
 impl<'a> Input<'a> {
@@ -86,24 +91,18 @@ impl<'a> Input<'a> {
         }
     }
 
-    pub(crate) fn optional_string(&mut self) -> Result<Optional<&'a str>, RenderError> {
+    /// A tagged primitive (`tag::UNDEFINED` … `tag::STRING`, `tag::BIGINT`).
+    pub(crate) fn primitive(&mut self) -> Result<Primitive<'a>, RenderError> {
         let offset = self.at;
-        match self.u8()? {
-            tag::UNDEFINED => Ok(Optional::Undefined),
-            tag::NULL => Ok(Optional::Null),
-            tag::STRING => Ok(Optional::Some(self.string()?)),
-            tag => Err(RenderError::BadTag { offset, tag }),
-        }
-    }
-
-    pub(crate) fn optional_bool(&mut self) -> Result<Optional<bool>, RenderError> {
-        let offset = self.at;
-        match self.u8()? {
-            tag::UNDEFINED => Ok(Optional::Undefined),
-            tag::NULL => Ok(Optional::Null),
-            tag::FALSE => Ok(Optional::Some(false)),
-            tag::TRUE => Ok(Optional::Some(true)),
-            tag => Err(RenderError::BadTag { offset, tag }),
-        }
+        Ok(match self.u8()? {
+            tag::UNDEFINED => Primitive::Undefined,
+            tag::NULL => Primitive::Null,
+            tag::FALSE => Primitive::Bool(false),
+            tag::TRUE => Primitive::Bool(true),
+            tag::NUMBER => Primitive::Number(self.f64()?),
+            tag::STRING => Primitive::String(self.string()?),
+            tag::BIGINT => Primitive::BigInt(self.bigint()?),
+            tag => return Err(RenderError::BadTag { offset, tag }),
+        })
     }
 }

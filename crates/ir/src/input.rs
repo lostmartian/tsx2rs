@@ -6,8 +6,8 @@
 //! |---|---|
 //! | [`Op::Text`](crate::Op::Text), [`Op::RawHtml`](crate::Op::RawHtml) | string: `u32` LE byte length, then UTF-8 bytes |
 //! | [`Op::Number`](crate::Op::Number) | `f64` LE |
-//! | [`Op::Attribute`](crate::Op::Attribute) | tag byte ([`tag::UNDEFINED`], [`tag::NULL`], [`tag::STRING`]), then the string |
-//! | [`Op::BooleanAttribute`](crate::Op::BooleanAttribute) | tag byte ([`tag::UNDEFINED`], [`tag::NULL`], [`tag::FALSE`], [`tag::TRUE`]) |
+//! | [`Op::Prop`](crate::Op::Prop) | a tagged primitive: [`tag::UNDEFINED`], [`tag::NULL`], [`tag::FALSE`], [`tag::TRUE`], [`tag::NUMBER`], [`tag::STRING`] or [`tag::BIGINT`], with its value |
+//! | [`Op::Attributes`](crate::Op::Attributes) | `u32` LE count, then per prop: its name (string) and a tagged primitive |
 //! | [`Op::If`](crate::Op::If) | `u8`: 0 false, 1 true |
 //! | [`Op::Loop`](crate::Op::Loop) | `u32` LE count |
 //! | [`Op::Island`](crate::Op::Island) | string (React's HTML), then a flags byte ([`island::TEXT_START`], [`island::TEXT_END`]) |
@@ -97,7 +97,7 @@ impl InputWriter {
         self
     }
 
-    /// A tag byte (for `Attribute`, `BooleanAttribute`, and generic values).
+    /// A tag byte (for props, children and generic values).
     pub fn tag(&mut self, tag: u8) -> &mut Self {
         self.bytes.push(tag);
         self

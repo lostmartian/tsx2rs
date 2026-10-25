@@ -6,8 +6,8 @@
 //! rules of their own (`input`, `select`, `option`, `textarea`, `button`, `form`, `img`, `link`,
 //! `meta`, `script`, `style`, `title`, `html`, `head`, `body`, custom elements) aren't covered.
 //!
-//! The compiler classifies props whose names it knows, and the engine classifies the names of a
-//! props object it reads at runtime, both
+//! The compiler classifies props whose names it knows ([`crate::Op::Prop`]), and the engine
+//! classifies the names of a props object it reads at runtime ([`crate::Op::Attributes`]), both
 //! with [`classify`]. Writing the values is the engine's job.
 
 /// How a prop's value is written as an HTML attribute. `null` and `undefined` are never written,
@@ -50,6 +50,25 @@ impl Kind {
         Self::Url,
         Self::NonEmptyUrl,
     ];
+
+    /// Its byte in the program format.
+    pub(crate) const fn to_byte(self) -> u8 {
+        match self {
+            Self::String => 0,
+            Self::Any => 1,
+            Self::Boolean => 2,
+            Self::OverloadedBoolean => 3,
+            Self::PositiveNumber => 4,
+            Self::Number => 5,
+            Self::Url => 6,
+            Self::NonEmptyUrl => 7,
+        }
+    }
+
+    /// The kind with this byte in the program format.
+    pub(crate) fn from_byte(byte: u8) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.to_byte() == byte)
+    }
 }
 
 /// Which element's prop rules apply.
@@ -64,6 +83,19 @@ pub enum ElementRules {
 impl ElementRules {
     /// Every rule set.
     pub const ALL: [Self; 2] = [Self::Generic, Self::Anchor];
+
+    /// Its byte in the program format.
+    pub(crate) const fn to_byte(self) -> u8 {
+        match self {
+            Self::Generic => 0,
+            Self::Anchor => 1,
+        }
+    }
+
+    /// The rules with this byte in the program format.
+    pub(crate) fn from_byte(byte: u8) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.to_byte() == byte)
+    }
 }
 
 /// What a prop is to React DOM.
