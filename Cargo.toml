@@ -17,6 +17,9 @@ tsx2rs_engine = { path = "crates/engine" }
 napi = { version = "3.15.0", default-features = false, features = ["napi8"] }
 napi-derive = "3.6.13"
 napi-build = "2.6.0"
+thiserror = "2.0.21"
+ryu-js = "1.0.3"
+proptest = "1.12.0"
 
 [workspace.lints.rust]
 missing_debug_implementations = "warn"
