@@ -58,6 +58,10 @@ pub enum Op {
     RawHtml,
     /// Reads any value (client component props): nothing in HTML; in Flight its JSON encoding.
     Value,
+    /// Reads a React node whose kind is known only at runtime (a `{x}` child, ADR-0005): a
+    /// string, number or bigint is a text node; `true`, `false`, `null` and `undefined` render
+    /// nothing; an array renders its nodes in order. In Flight, the node's value.
+    Child,
     /// Reads a client component's HTML as rendered by React, with its text-edge flags: written
     /// to HTML as is; nothing in Flight (the reference and props are separate ops).
     Island,
@@ -203,7 +207,7 @@ fn validate(chunks: &[Box<[u8]>], ops: &[Op]) -> Result<(), FormatError> {
                     });
                 }
             }
-            Op::Text | Op::Number | Op::RawHtml | Op::Value | Op::Island => {}
+            Op::Text | Op::Number | Op::RawHtml | Op::Value | Op::Child | Op::Island => {}
         }
     }
     if let Some(&(start, _)) = loops.last() {

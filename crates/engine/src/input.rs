@@ -60,6 +60,23 @@ impl<'a> Input<'a> {
         std::str::from_utf8(bytes).map_err(|_| RenderError::InvalidUtf8 { offset })
     }
 
+    /// A bigint's decimal digits (`-?[0-9]+`, no leading zeros), as `String(value)` writes them.
+    pub(crate) fn bigint(&mut self) -> Result<&'a str, RenderError> {
+        let offset = self.at;
+        let s = self.string()?;
+        let digits = s.strip_prefix('-').unwrap_or(s);
+        let canonical = match digits.as_bytes() {
+            [b'0'] => s.len() == 1,   // `-0` isn't a bigint
+            [] | [b'0', ..] => false, // empty, or a leading zero
+            bytes => bytes.iter().all(u8::is_ascii_digit),
+        };
+        if canonical {
+            Ok(s)
+        } else {
+            Err(RenderError::BadBigInt { offset })
+        }
+    }
+
     pub(crate) fn condition(&mut self) -> Result<bool, RenderError> {
         let offset = self.at;
         match self.u8()? {

@@ -11,7 +11,7 @@
 //! Opcodes and operands: 0 `Static` (html, flight, then one flags byte: bit 0 `text_start`,
 //! bit 1 `text_end`), 1 `Text`, 2 `Number`, 3 `Attribute` (name), 4 `BooleanAttribute` (name), 5 `RawHtml`,
 //! 6 `Value`, 7 `Island`, 8 `Loop` (end, separator + 1 or 0 for none), 9 `EndLoop`, 10 `If`
-//! (else), 11 `Jump` (to). Decoding validates the program ([`Program::new`]), and encoding is
+//! (else), 11 `Jump` (to), 12 `Child`. Decoding validates the program ([`Program::new`]), and encoding is
 //! deterministic.
 
 use crate::{ChunkId, FormatError, Op, OpIndex, PROGRAM_FORMAT_VERSION, Program};
@@ -31,6 +31,7 @@ const LOOP: u8 = 8;
 const END_LOOP: u8 = 9;
 const IF: u8 = 10;
 const JUMP: u8 = 11;
+const CHILD: u8 = 12;
 
 impl Program {
     /// Encodes the program in the binary format.
@@ -73,6 +74,7 @@ impl Program {
                 }
                 Op::RawHtml => out.push(RAW_HTML),
                 Op::Value => out.push(VALUE),
+                Op::Child => out.push(CHILD),
                 Op::Island => out.push(ISLAND),
                 Op::Loop { end, separator } => {
                     out.push(LOOP);
@@ -147,6 +149,7 @@ impl Program {
                 },
                 RAW_HTML => Op::RawHtml,
                 VALUE => Op::Value,
+                CHILD => Op::Child,
                 ISLAND => Op::Island,
                 LOOP => {
                     let end = OpIndex(r.u32()?);

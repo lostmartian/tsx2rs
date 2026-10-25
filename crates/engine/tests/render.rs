@@ -61,6 +61,9 @@ impl Builder {
     }
 }
 
+/// Writes one test input.
+type Write = fn(&mut InputWriter);
+
 fn input(write: impl FnOnce(&mut InputWriter)) -> Vec<u8> {
     let mut w = InputWriter::new();
     write(&mut w);
@@ -283,6 +286,175 @@ fn writes_generic_values_to_flight_only() {
             r#"{"$id":"$$x","n":"$-0","list":[true,null,"$undefined"],"empty":{}}"#.into()
         )
     );
+}
+
+#[test]
+fn renders_runtime_children_by_their_kind() {
+    let p = Builder::default()
+        .stat("<p>", "")
+        .op(Op::Child)
+        .stat("</p>", "")
+        .build();
+    // (input, HTML between the tags, Flight)
+    let cases: [(Write, &str, &str); 9] = [
+        (
+            |w| {
+                w.tag(tag::STRING).string("a<b");
+            },
+            "a&lt;b",
+            r#""a<b""#,
+        ),
+        (
+            |w| {
+                w.tag(tag::STRING).string("$x");
+            },
+            "$x",
+            r#""$$x""#,
+        ),
+        (
+            |w| {
+                w.tag(tag::STRING).string("");
+            },
+            "",
+            r#""""#,
+        ),
+        (
+            |w| {
+                w.tag(tag::NUMBER).number(-0.0);
+            },
+            "0",
+            r#""$-0""#,
+        ),
+        (
+            |w| {
+                w.tag(tag::BIGINT).string("-12");
+            },
+            "-12",
+            r#""$n-12""#,
+        ),
+        (
+            |w| {
+                w.tag(tag::TRUE);
+            },
+            "",
+            "true",
+        ),
+        (
+            |w| {
+                w.tag(tag::FALSE);
+            },
+            "",
+            "false",
+        ),
+        (
+            |w| {
+                w.tag(tag::NULL);
+            },
+            "",
+            "null",
+        ),
+        (
+            |w| {
+                w.tag(tag::UNDEFINED);
+            },
+            "",
+            r#""$undefined""#,
+        ),
+    ];
+    for (write, html, flight) in cases {
+        assert_eq!(
+            run(&p, &input(write)),
+            (format!("<p>{html}</p>"), flight.to_owned())
+        );
+    }
+}
+
+#[test]
+fn renders_arrays_of_children_in_order_with_text_separators() {
+    let p = Builder::default()
+        .text("a", r#""a""#, true, true)
+        .op(Op::Child)
+        .text("z", r#""z""#, true, true)
+        .build();
+    let bytes = input(|w| {
+        w.tag(tag::ARRAY).count(6);
+        w.tag(tag::STRING).string("b");
+        w.tag(tag::NULL); // renders nothing: "b" and 1 are still adjacent
+        w.tag(tag::NUMBER).number(1.0);
+        w.tag(tag::STRING).string(""); // nothing, and keeps the text state
+        w.tag(tag::ARRAY)
+            .count(2)
+            .tag(tag::BIGINT)
+            .string("2")
+            .tag(tag::FALSE);
+        w.tag(tag::ARRAY).count(0);
+    });
+    assert_eq!(
+        run(&p, &bytes),
+        (
+            "a<!-- -->b<!-- -->1<!-- -->2<!-- -->z".into(),
+            r#""a"["b",null,1,"",["$n2",false],[]]"z""#.into()
+        )
+    );
+}
+
+#[test]
+fn a_child_that_renders_nothing_keeps_the_text_state() {
+    let p = Builder::default()
+        .text("a", "", true, true)
+        .op(Op::Child)
+        .text("b", "", true, true)
+        .build();
+    let writes: [Write; 3] = [
+        |w| {
+            w.tag(tag::NULL);
+        },
+        |w| {
+            w.tag(tag::STRING).string("");
+        },
+        |w| {
+            w.tag(tag::ARRAY).count(0);
+        },
+    ];
+    for write in writes {
+        assert_eq!(run(&p, &input(write)).0, "a<!-- -->b");
+    }
+}
+
+#[test]
+fn rejects_child_values_react_would_not_render() {
+    let p = Builder::default().op(Op::Child).build();
+    assert_eq!(
+        error(
+            &p,
+            &input(|w| {
+                w.tag(tag::OBJECT).count(0);
+            })
+        ),
+        RenderError::BadTag {
+            offset: 0,
+            tag: tag::OBJECT
+        }
+    );
+    for digits in ["", "-", "-0", "01", "-01", "1.5", "1e3", "+1", "\u{661}"] {
+        assert_eq!(
+            error(
+                &p,
+                &input(|w| {
+                    w.tag(tag::BIGINT).string(digits);
+                })
+            ),
+            RenderError::BadBigInt { offset: 1 },
+            "{digits:?}"
+        );
+    }
+    let deep = input(|w| {
+        for _ in 0..=MAX_VALUE_DEPTH {
+            w.tag(tag::ARRAY).count(1);
+        }
+        w.tag(tag::NULL);
+    });
+    assert!(matches!(error(&p, &deep), RenderError::TooDeep { .. }));
 }
 
 #[test]
@@ -530,8 +702,8 @@ proptest! {
         let _ = render(&p, &bytes, &mut Output::new());
         let mut b = Builder::default();
         let name = b.chunk("a");
-        let every_op = b.op(Op::Value).op(Op::Island).op(Op::RawHtml).op(Op::Number)
-            .op(Op::Attribute { name }).op(Op::BooleanAttribute { name }).op(Op::If { else_: OpIndex(7) })
+        let every_op = b.op(Op::Value).op(Op::Child).op(Op::Island).op(Op::RawHtml).op(Op::Number)
+            .op(Op::Attribute { name }).op(Op::BooleanAttribute { name }).op(Op::If { else_: OpIndex(8) })
             .op(Op::Text).build();
         let _ = render(&every_op, &bytes, &mut Output::new());
     }
