@@ -17,6 +17,7 @@ export default {
         "adapter",
         "runtime",
         "native",
+        "identity",
         "repo",
         "deps",
         "deps-dev",
