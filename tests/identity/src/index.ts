@@ -12,6 +12,7 @@ export {
   type NormalizedDocument,
 } from "./compare.ts";
 export { IdentityError, type IdentityErrorCode } from "./errors.ts";
+export { listFixtures, loadFixture, parseExpectations, type Fixture } from "./fixtures.ts";
 export {
   decodeFlight,
   extractFlight,
@@ -23,4 +24,5 @@ export {
   type Rows,
   type Tagged,
 } from "./flight.ts";
+export { buildNextApp, startNextApp, type RunningServer } from "./next.ts";
 export { resolveStreamedHtml, type ResolvedDocument, type StreamInstruction } from "./streaming.ts";
