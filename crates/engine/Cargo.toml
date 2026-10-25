@@ -14,7 +14,12 @@ thiserror.workspace = true
 tsx2rs_ir.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 proptest.workspace = true
+
+[[bench]]
+name = "render"
+harness = false
 
 [lints]
 workspace = true

@@ -39,6 +39,7 @@ pnpm build:native     # build the Rust addon used by the JS packages
 pnpm check            # everything CI runs (scripts/check.sh)
 pnpm test:identity    # just the Next.js fixture tests (builds every fixture)
 cargo nextest run -p tsx2rs_differential   # just the engine-vs-React differential tests
+cargo bench -p tsx2rs_engine               # engine micro-benchmarks (post before/after numbers for hot-path changes)
 bash scripts/coverage.sh   # Rust coverage floors (CI runs this too)
 ```
 
