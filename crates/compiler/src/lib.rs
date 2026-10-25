@@ -7,6 +7,7 @@
 #![deny(missing_docs)]
 
 pub mod diagnostic;
+pub mod graph;
 
 /// The template-program format version this compiler emits.
 #[must_use]
