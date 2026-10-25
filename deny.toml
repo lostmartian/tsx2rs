@@ -17,6 +17,10 @@ allow = [
   "MIT",
   "ISC",
   "Unicode-3.0",
+  # dragonbox_ecma (number formatting, via oxc): "Apache-2.0 WITH LLVM-exception OR BSL-1.0"
+  "Apache-2.0 WITH LLVM-exception",
+  # foldhash (hashing, via oxc)
+  "Zlib",
 ]
 confidence-threshold = 0.9
 

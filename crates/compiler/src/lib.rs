@@ -4,6 +4,10 @@
 //! inference, lowering, program emission, encoder generation) is described in
 //! `ARCHITECTURE.md`. Each phase is a pure function of its input.
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
+
+pub mod diagnostic;
+pub mod graph;
 
 /// The template-program format version this compiler emits.
 #[must_use]
