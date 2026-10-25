@@ -10,3 +10,6 @@ dist/
 # Generated native binding (packages/native: pnpm build:native)
 packages/native/binding/
 coverage/
+
+# Next.js build output and generated files (fixture apps)
+next-env.d.ts

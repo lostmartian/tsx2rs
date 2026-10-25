@@ -10,6 +10,8 @@ export default defineConfig(
       "**/node_modules/",
       "**/coverage/",
       "**/dist/",
+      "**/.next/",
+      "**/next-env.d.ts",
       "packages/native/binding/",
     ],
   },
