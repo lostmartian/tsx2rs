@@ -4,3 +4,5 @@ dist/
 pnpm-lock.yaml
 packages/native/binding/
 *.md
+.next/
+next-env.d.ts

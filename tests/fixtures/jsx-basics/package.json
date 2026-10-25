@@ -1,0 +1,21 @@
+{
+  "name": "@tsx2rs/fixture-jsx-basics",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Identity fixture: React's HTML output rules on a dynamically rendered page",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "next build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:"
+  }
+}

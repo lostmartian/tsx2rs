@@ -31,7 +31,7 @@ Next.js's streaming chunking depends on timing, so the raw byte stream is never 
 ## Fixtures
 
 - Each fixture in `tests/fixtures/<area>-<feature>/` is a minimal Next.js app for one construct, e.g. `jsx-text-adjacent`, `list-map-keys`, `cond-ternary`, `clsx-dynamic`, `suspense-streamed`, `island-props-dedupe`, `metadata-og`, `fallback-unsupported-hook`.
-- **Each fixture has a `README.md`** saying what it covers, and an `expect.json` listing its URLs and expected compiled/fallback status per route.
+- **Each fixture has a `README.md`** saying what it covers, and an `expect.json` listing its URLs and whether Next.js streams a boundary for them. The expected compiled/fallback status per route is added to `expect.json` when the runtime exists (milestone 1, step 8). See [`tests/fixtures/README.md`](../../tests/fixtures/README.md).
 - **Every new supported construct comes with a fixture, and so does every fallback reason.**
 
 ## Rules
