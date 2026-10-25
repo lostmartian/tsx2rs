@@ -6,3 +6,7 @@ dist/
 *.tsbuildinfo
 .DS_Store
 .env*.local
+
+# Generated native binding (packages/native: pnpm build:native)
+packages/native/binding/
+coverage/
