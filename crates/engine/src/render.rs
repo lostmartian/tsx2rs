@@ -1,7 +1,8 @@
 //! The interpreter: runs a template program over its input and writes HTML and Flight.
 
-use crate::input::{Input, Optional};
+use crate::input::{Input, Primitive};
 use crate::{RenderError, flight, html};
+use tsx2rs_ir::attribute::{self, ElementRules, Kind, Prop};
 use tsx2rs_ir::input::{island, tag};
 use tsx2rs_ir::{ChunkId, Op, Program};
 
@@ -112,8 +113,10 @@ impl Renderer<'_, '_> {
                     self.last_text = true;
                     flight::number(&mut self.out.flight, n);
                 }
-                Op::Attribute { name } => self.attribute(name, input)?,
-                Op::BooleanAttribute { name } => self.boolean_attribute(name, input)?,
+                Op::Prop { name, kind } => self.prop(name, kind, input)?,
+                Op::Attributes { rules, comma_after } => {
+                    self.attributes(rules, comma_after, input)?;
+                }
                 Op::RawHtml => {
                     let s = input.string()?;
                     self.out.html.extend_from_slice(s.as_bytes());
@@ -147,36 +150,58 @@ impl Renderer<'_, '_> {
         Ok(())
     }
 
-    fn attribute(&mut self, name: ChunkId, input: &mut Input<'_>) -> Result<(), RenderError> {
-        match input.optional_string()? {
-            Optional::Some(value) => {
-                self.attribute_start(name);
-                html::escape(&mut self.out.html, value);
-                self.out.html.push(b'"');
-                flight::string(&mut self.out.flight, value);
-            }
-            Optional::Null => self.out.flight.extend_from_slice(b"null"),
-            Optional::Undefined => self.out.flight.extend_from_slice(flight::UNDEFINED),
-        }
+    /// A prop whose name the compiler knows: HTML by its kind's rules, Flight the value.
+    fn prop(
+        &mut self,
+        name: ChunkId,
+        kind: Kind,
+        input: &mut Input<'_>,
+    ) -> Result<(), RenderError> {
+        let offset = input.offset();
+        let value = input.primitive()?;
+        html::attribute(&mut self.out.html, self.program.chunk(name), kind, value)
+            .map_err(|_| RenderError::InvalidValue { offset })?;
+        flight::primitive(&mut self.out.flight, value);
         Ok(())
     }
 
-    fn boolean_attribute(
+    /// A props object whose names are known only at runtime: each prop classified and written
+    /// by React DOM's rules, and written to Flight as `"name":value`.
+    fn attributes(
         &mut self,
-        name: ChunkId,
+        rules: ElementRules,
+        comma_after: bool,
         input: &mut Input<'_>,
     ) -> Result<(), RenderError> {
-        match input.optional_bool()? {
-            Optional::Some(value) => {
-                if value {
-                    self.attribute_start(name);
-                    self.out.html.push(b'"');
+        let count = input.u32()?;
+        for i in 0..count {
+            let name_offset = input.offset();
+            let prop = input.string()?;
+            let offset = input.offset();
+            let value = input.primitive()?;
+            let present = !matches!(value, Primitive::Undefined | Primitive::Null);
+            match attribute::classify(prop, rules) {
+                Prop::Attribute { name, kind } => {
+                    html::attribute(&mut self.out.html, name.as_bytes(), kind, value)
+                        .map_err(|_| RenderError::InvalidValue { offset })?;
                 }
-                let json: &[u8] = if value { b"true" } else { b"false" };
-                self.out.flight.extend_from_slice(json);
+                Prop::Style | Prop::Content if present => {
+                    return Err(RenderError::UnsupportedProp {
+                        offset: name_offset,
+                    });
+                }
+                Prop::Ref if present => return Err(RenderError::InvalidValue { offset }),
+                Prop::Style | Prop::Content | Prop::Ref | Prop::Ignored => {}
             }
-            Optional::Null => self.out.flight.extend_from_slice(b"null"),
-            Optional::Undefined => self.out.flight.extend_from_slice(flight::UNDEFINED),
+            if i > 0 {
+                self.out.flight.push(b',');
+            }
+            flight::key(&mut self.out.flight, prop);
+            self.out.flight.push(b':');
+            flight::primitive(&mut self.out.flight, value);
+        }
+        if comma_after && count > 0 {
+            self.out.flight.push(b',');
         }
         Ok(())
     }
@@ -227,12 +252,6 @@ impl Renderer<'_, '_> {
         if self.last_text {
             self.out.html.extend_from_slice(html::TEXT_SEPARATOR);
         }
-    }
-
-    fn attribute_start(&mut self, name: ChunkId) {
-        self.out.html.push(b' ');
-        self.out.html.extend_from_slice(self.program.chunk(name));
-        self.out.html.extend_from_slice(b"=\"");
     }
 
     /// A node known only at runtime, as React DOM's server renders a child (`renderNodeDestructive`
@@ -297,6 +316,7 @@ impl Renderer<'_, '_> {
             tag::TRUE => out.extend_from_slice(b"true"),
             tag::NUMBER => flight::number(out, input.f64()?),
             tag::STRING => flight::string(out, input.string()?),
+            tag::BIGINT => flight::bigint(out, input.bigint()?),
             tag::ARRAY => {
                 let count = input.u32()?;
                 self.out.flight.push(b'[');

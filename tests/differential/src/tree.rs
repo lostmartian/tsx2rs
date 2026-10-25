@@ -28,13 +28,17 @@ pub enum Tree {
     Element(Element),
 }
 
-/// A host element (`<div>`, `<input>`, …).
+/// A host element (`<div>`, `<a>`, `<br>`, …).
 #[derive(Clone, Debug)]
 pub struct Element {
     /// The tag.
     pub tag: &'static str,
-    /// Props in order: React prop name and value.
-    pub attributes: Vec<(&'static str, Attribute)>,
+    /// Props in order (unique names): React prop name and value.
+    pub props: Vec<(String, Value)>,
+    /// Whether the props come from a spread (`<div {...props}>`): the compiler doesn't know
+    /// their names, so they're lowered to one `Op::Attributes`. Otherwise each prop is an
+    /// `Op::Prop` (or `Op::Value` for props React doesn't write).
+    pub spread: bool,
     /// Children (none for void elements).
     pub children: Vec<Tree>,
 }
@@ -47,12 +51,16 @@ impl Element {
     }
 }
 
-/// An attribute value.
+/// A prop's value: a primitive.
 #[derive(Clone, Debug)]
-pub enum Attribute {
-    /// A string (for string props such as `className`).
+pub enum Value {
+    /// A string.
     String(String),
-    /// A boolean (for boolean props such as `hidden`).
+    /// A number.
+    Number(f64),
+    /// A bigint: its decimal digits.
+    BigInt(String),
+    /// A boolean.
     Bool(bool),
     /// `null`
     Null,
@@ -60,32 +68,86 @@ pub enum Attribute {
     Undefined,
 }
 
-/// Tags the generator uses. Raw-text and special elements (`script`, `style`, `title`,
-/// `textarea`, `select`, `option`) have extra React rules and get their own tests later.
+/// Tags whose props follow React DOM's generic rules, plus `a` (the only difference: `href=""`
+/// is written). Elements with rules of their own (`input`, `select`, `img`, `script`, …) get
+/// their own tests with the engine support for them.
 pub const TAGS: &[&str] = &[
-    "div", "span", "p", "ul", "li", "b", "i", "section", "h1", "button",
+    "div", "span", "p", "ul", "li", "b", "i", "section", "h1", "a", "svg", "g", "path", "td",
 ];
-/// Void tags the generator uses.
-pub const VOID_TAGS: &[&str] = &["br", "img", "input"];
-/// String props and their HTML attribute names.
-pub const STRING_PROPS: &[(&str, &str)] = &[
-    ("className", "class"),
-    ("id", "id"),
-    ("title", "title"),
-    ("data-x", "data-x"),
-];
-/// Boolean props and their HTML attribute names.
-pub const BOOLEAN_PROPS: &[(&str, &str)] = &[("hidden", "hidden"), ("disabled", "disabled")];
+/// Void tags the generator uses (React's `pushSelfClosing`).
+pub const VOID_TAGS: &[&str] = &["br", "hr", "wbr"];
 
-/// The HTML attribute name of a React prop the generator uses.
-#[must_use]
-pub fn html_name(prop: &str) -> &'static str {
-    STRING_PROPS
-        .iter()
-        .chain(BOOLEAN_PROPS)
-        .find(|(p, _)| *p == prop)
-        .map_or("", |(_, h)| h)
-}
+/// Prop names covering every class of React DOM's `pushAttribute`: renamed, string, any,
+/// boolean, overloaded boolean, numeric and URL props, ignored props, and aliases. Names React
+/// treats specially elsewhere are left out: `style` (its own op), `children` and
+/// `dangerouslySetInnerHTML` (content), `key` (not a prop) and `ref` (React's Flight server
+/// throws on it).
+const KNOWN_PROPS: &[&str] = &[
+    "className",
+    "tabIndex",
+    "dir",
+    "role",
+    "viewBox",
+    "width",
+    "height",
+    "id",
+    "title",
+    "src",
+    "href",
+    "action",
+    "formAction",
+    "xlinkHref",
+    "defaultValue",
+    "defaultChecked",
+    "innerHTML",
+    "suppressHydrationWarning",
+    "suppressContentEditableWarning",
+    "autoFocus",
+    "multiple",
+    "muted",
+    "contentEditable",
+    "spellCheck",
+    "draggable",
+    "value",
+    "focusable",
+    "hidden",
+    "disabled",
+    "inert",
+    "itemScope",
+    "open",
+    "capture",
+    "download",
+    "cols",
+    "rows",
+    "size",
+    "span",
+    "rowSpan",
+    "start",
+    "xlinkTitle",
+    "xmlLang",
+    "htmlFor",
+    "httpEquiv",
+    "strokeWidth",
+    "xmlnsXlink",
+    "panose-1",
+    "onClick",
+    "onmouseover",
+    "on",
+    "data-id",
+    "Data-Flag",
+    "aria-hidden",
+    "ARIA-x",
+    "data",
+    "my-attr",
+    "x:y",
+    "é",
+];
+
+/// Names React drops as unsafe in HTML.
+const UNSAFE_PROPS: &[&str] = &["1x", "-x", "a b", "a\"b", "a=b", "x>", "😀"];
+
+/// Props React converts to a number (`isNaN` throws on a bigint, so they get no bigints).
+const NUMERIC_PROPS: &[&str] = &["cols", "rows", "size", "span", "rowSpan", "start"];
 
 // ---------------------------------------------------------------- JSON for the oracle
 
@@ -101,19 +163,11 @@ impl Tree {
     fn write_json(&self, out: &mut String) {
         match self {
             Self::Text(s) => json_string(out, s),
-            Self::Number(n) => {
-                out.push_str(r#"{"n":"#);
-                json_string(out, &number_repr(*n));
-                out.push('}');
-            }
+            Self::Number(n) => number_json(out, *n),
             Self::Null => out.push_str("null"),
             Self::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
             Self::Undefined => out.push_str(r#"{"u":1}"#),
-            Self::BigInt(digits) => {
-                out.push_str(r#"{"b":"#);
-                json_string(out, digits);
-                out.push('}');
-            }
+            Self::BigInt(digits) => bigint_json(out, digits),
             Self::Array(nodes) => {
                 out.push('[');
                 for (i, node) in nodes.iter().enumerate() {
@@ -129,7 +183,7 @@ impl Tree {
                 out.push_str(r#"{"t":"#);
                 json_string(out, e.tag);
                 out.push_str(r#","a":["#);
-                for (i, (name, value)) in e.attributes.iter().enumerate() {
+                for (i, (name, value)) in e.props.iter().enumerate() {
                     if i > 0 {
                         out.push(',');
                     }
@@ -137,10 +191,12 @@ impl Tree {
                     json_string(out, name);
                     out.push(',');
                     match value {
-                        Attribute::String(s) => json_string(out, s),
-                        Attribute::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-                        Attribute::Null => out.push_str("null"),
-                        Attribute::Undefined => out.push_str(r#"{"u":1}"#),
+                        Value::String(s) => json_string(out, s),
+                        Value::Number(n) => number_json(out, *n),
+                        Value::BigInt(digits) => bigint_json(out, digits),
+                        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+                        Value::Null => out.push_str("null"),
+                        Value::Undefined => out.push_str(r#"{"u":1}"#),
                     }
                     out.push(']');
                 }
@@ -155,6 +211,18 @@ impl Tree {
             }
         }
     }
+}
+
+fn number_json(out: &mut String, n: f64) {
+    out.push_str(r#"{"n":"#);
+    json_string(out, &number_repr(n));
+    out.push('}');
+}
+
+fn bigint_json(out: &mut String, digits: &str) {
+    out.push_str(r#"{"b":"#);
+    json_string(out, digits);
+    out.push('}');
 }
 
 /// A number as text JavaScript's `Number()` parses back exactly (including `NaN`, `-0`,
@@ -216,37 +284,6 @@ fn number() -> impl Strategy<Value = f64> {
     ]
 }
 
-fn attributes() -> impl Strategy<Value = Vec<(&'static str, Attribute)>> {
-    let string_value = prop_oneof![
-        6 => text().prop_map(Attribute::String),
-        1 => Just(Attribute::Null),
-        1 => Just(Attribute::Undefined),
-    ];
-    let boolean_value = prop_oneof![
-        3 => any::<bool>().prop_map(Attribute::Bool),
-        1 => Just(Attribute::Null),
-        1 => Just(Attribute::Undefined),
-    ];
-    let string_attrs = prop::sample::subsequence(STRING_PROPS.to_vec(), 0..=STRING_PROPS.len())
-        .prop_flat_map(move |props| {
-            props
-                .into_iter()
-                .map(|(p, _)| (Just(p), string_value.clone()))
-                .collect::<Vec<_>>()
-        });
-    let boolean_attrs = prop::sample::subsequence(BOOLEAN_PROPS.to_vec(), 0..=BOOLEAN_PROPS.len())
-        .prop_flat_map(move |props| {
-            props
-                .into_iter()
-                .map(|(p, _)| (Just(p), boolean_value.clone()))
-                .collect::<Vec<_>>()
-        });
-    (string_attrs, boolean_attrs).prop_map(|(mut a, b)| {
-        a.extend(b);
-        a
-    })
-}
-
 /// Bigints: small, negative, zero and beyond 64 bits.
 fn bigint() -> impl Strategy<Value = String> {
     prop_oneof![
@@ -254,6 +291,84 @@ fn bigint() -> impl Strategy<Value = String> {
         1 => "-?[1-9][0-9]{19,40}",
         1 => Just("0".to_owned()),
     ]
+}
+
+/// Strings that exercise the value rules: numeric strings (for `isNaN` and `1 <= value`) and
+/// URLs (`javascript:` blocking).
+fn special_string() -> impl Strategy<Value = String> {
+    prop::sample::select(vec![
+        "0",
+        "1",
+        "2",
+        " 3 ",
+        "0.5",
+        "1e0",
+        "0x10",
+        "0X1f",
+        "0b11",
+        "0O7",
+        "0x",
+        "1.",
+        ".5e1",
+        "+2",
+        "-0",
+        "-1",
+        "Infinity",
+        "-Infinity",
+        "infinity",
+        "1_0",
+        "\u{3000}4\u{FEFF}",
+        "abc",
+        "",
+        "javascript:alert(1)",
+        " \tJaVa\nScRiPt:x",
+        "/a?b=1&c=2",
+        "https://example.com",
+        "java script:x",
+    ])
+    .prop_map(str::to_owned)
+}
+
+fn prop_value(numeric: bool) -> BoxedStrategy<Value> {
+    let bigint = if numeric {
+        Just(Value::Null).boxed()
+    } else {
+        bigint().prop_map(Value::BigInt).boxed()
+    };
+    prop_oneof![
+        4 => text().prop_map(Value::String),
+        3 => special_string().prop_map(Value::String),
+        2 => number().prop_map(Value::Number),
+        1 => bigint,
+        3 => any::<bool>().prop_map(Value::Bool),
+        1 => Just(Value::Null),
+        1 => Just(Value::Undefined),
+    ]
+    .boxed()
+}
+
+fn prop_name() -> impl Strategy<Value = String> {
+    prop_oneof![
+        8 => prop::sample::select(KNOWN_PROPS).prop_map(str::to_owned),
+        1 => prop::sample::select(UNSAFE_PROPS).prop_map(str::to_owned),
+        1 => "[a-zA-Z][a-zA-Z0-9-]{0,6}",
+    ]
+}
+
+fn props() -> impl Strategy<Value = Vec<(String, Value)>> {
+    prop::collection::vec(prop_name(), 0..6).prop_flat_map(|mut names| {
+        let mut seen = std::collections::HashSet::new();
+        names.retain(|n| {
+            !matches!(n.as_str(), "key" | "ref" | "style" | "children") && seen.insert(n.clone())
+        });
+        names
+            .into_iter()
+            .map(|name| {
+                let numeric = NUMERIC_PROPS.contains(&name.as_str());
+                (Just(name), prop_value(numeric))
+            })
+            .collect::<Vec<_>>()
+    })
 }
 
 /// The nodes a template can't know until runtime, as `Op::Child` reads them: primitives and
@@ -277,26 +392,29 @@ fn hole() -> impl Strategy<Value = Tree> {
         .prop_map(|node| Tree::Hole(Box::new(node)))
 }
 
-/// A random tree: elements (normal and void) with attributes; text, numbers, bigints, `null`,
+/// A random tree: elements (normal and void) with props; text, numbers, bigints, `null`,
 /// `undefined` and booleans; arrays; and runtime holes.
 pub fn tree() -> impl Strategy<Value = Tree> {
     let leaf = prop_oneof![
         11 => primitive(),
         3 => hole(),
-        1 => (prop::sample::select(VOID_TAGS), attributes())
-            .prop_map(|(tag, attributes)| Tree::Element(Element { tag, attributes, children: vec![] })),
+        1 => (prop::sample::select(VOID_TAGS), props(), any::<bool>()).prop_map(
+            |(tag, props, spread)| Tree::Element(Element { tag, props, spread, children: vec![] })
+        ),
     ];
     leaf.prop_recursive(4, 48, 5, |inner| {
         prop_oneof![
             4 => (
                 prop::sample::select(TAGS),
-                attributes(),
+                props(),
+                any::<bool>(),
                 prop::collection::vec(inner.clone(), 0..5),
             )
-                .prop_map(|(tag, attributes, children)| {
+                .prop_map(|(tag, props, spread, children)| {
                     Tree::Element(Element {
                         tag,
-                        attributes,
+                        props,
+                        spread,
                         children,
                     })
                 }),

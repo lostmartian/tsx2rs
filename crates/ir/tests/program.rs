@@ -4,6 +4,7 @@
 #![allow(clippy::unwrap_used)]
 
 use proptest::prelude::*;
+use tsx2rs_ir::attribute::{ElementRules, Kind};
 use tsx2rs_ir::{ChunkId, FormatError, MAGIC, Op, OpIndex, PROGRAM_FORMAT_VERSION, Program};
 
 fn chunks(n: usize) -> Vec<Box<[u8]>> {
@@ -27,8 +28,14 @@ fn accepts_a_program_with_every_op() {
         stat(0, 1),
         Op::Text,
         Op::Number,
-        Op::Attribute { name: ChunkId(2) },
-        Op::BooleanAttribute { name: ChunkId(2) },
+        Op::Prop {
+            name: ChunkId(2),
+            kind: Kind::String,
+        },
+        Op::Attributes {
+            rules: ElementRules::Anchor,
+            comma_after: true,
+        },
         Op::RawHtml,
         Op::Value,
         Op::Child,
@@ -60,7 +67,10 @@ fn rejects_programs_that_break_a_rule() {
         ),
         (
             "a missing attribute name",
-            vec![Op::Attribute { name: ChunkId(9) }],
+            vec![Op::Prop {
+                name: ChunkId(9),
+                kind: Kind::Boolean,
+            }],
             FormatError::ChunkOutOfRange { op: 0, chunk: 9 },
         ),
         (
@@ -280,6 +290,59 @@ fn rejects_malformed_files() {
 }
 
 #[test]
+fn encodes_every_prop_kind_and_element_rules() {
+    let mut ops: Vec<Op> = Kind::ALL
+        .into_iter()
+        .map(|kind| Op::Prop {
+            name: ChunkId(0),
+            kind,
+        })
+        .collect();
+    for rules in ElementRules::ALL {
+        for comma_after in [false, true] {
+            ops.push(Op::Attributes { rules, comma_after });
+        }
+    }
+    let program = Program::new(chunks(1), ops).unwrap();
+    assert_eq!(Program::decode(&program.encode().unwrap()), Ok(program));
+}
+
+#[test]
+fn rejects_unknown_prop_kinds_rules_and_flags() {
+    let encode = |op: Op| Program::new(chunks(1), vec![op]).unwrap().encode().unwrap();
+    let prop = encode(Op::Prop {
+        name: ChunkId(0),
+        kind: Kind::String,
+    });
+    let attributes = encode(Op::Attributes {
+        rules: ElementRules::Generic,
+        comma_after: false,
+    });
+    let bad = |mut bytes: Vec<u8>, from_end: usize, value: u8| {
+        let at = bytes.len() - from_end;
+        bytes[at] = value;
+        Program::decode(&bytes)
+    };
+    for (bytes, from_end, value) in [
+        (prop, 1, u8::try_from(Kind::ALL.len()).unwrap()),
+        (
+            attributes.clone(),
+            2,
+            u8::try_from(ElementRules::ALL.len()).unwrap(),
+        ),
+        (attributes, 1, 2),
+    ] {
+        assert!(
+            matches!(
+                bad(bytes, from_end, value),
+                Err(FormatError::BadOpcode { .. })
+            ),
+            "byte {value} at {from_end} from the end"
+        );
+    }
+}
+
+#[test]
 fn rejects_unknown_static_flags() {
     let mut bytes = Program::new(chunks(1), vec![stat(0, 0)])
         .unwrap()
@@ -328,8 +391,14 @@ fn lower(nodes: &[Node], ops: &mut Vec<Op>) {
             Node::Read(kind) => ops.push(match kind {
                 0 => Op::Text,
                 1 => Op::Number,
-                2 => Op::Attribute { name: ChunkId(0) },
-                3 => Op::BooleanAttribute { name: ChunkId(1) },
+                2 => Op::Prop {
+                    name: ChunkId(0),
+                    kind: Kind::Url,
+                },
+                3 => Op::Attributes {
+                    rules: ElementRules::Generic,
+                    comma_after: false,
+                },
                 4 => Op::RawHtml,
                 5 => Op::Value,
                 6 => Op::Child,
