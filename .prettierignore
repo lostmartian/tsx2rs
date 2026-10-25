@@ -1,0 +1,6 @@
+target/
+coverage/
+dist/
+pnpm-lock.yaml
+packages/native/binding/
+*.md

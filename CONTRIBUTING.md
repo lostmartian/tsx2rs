@@ -27,14 +27,17 @@ Crate names are prefixed (`tsx2rs_engine`); folders are not (`crates/engine`). n
 ## Setup
 
 Requirements (pinned in the repo):
-- Rust: the version in `rust-toolchain.toml`
+- Rust: the version in `rust-toolchain.toml` (rustup installs it on first use)
 - Node.js: the version in `.node-version`
 - pnpm: the version in `package.json` `packageManager`
+- git 2.31 or later (for the git hooks)
+- Cargo tools: `cargo install --locked cargo-nextest cargo-deny cargo-llvm-cov`
 
 ```bash
 pnpm install          # JS dependencies + git hooks (lefthook)
-cargo build           # Rust workspace
-pnpm check            # everything CI runs: format, lint, types, tests
+pnpm build:native     # build the Rust addon used by the JS packages
+pnpm check            # everything CI runs (scripts/check.sh)
+bash scripts/coverage.sh   # Rust coverage floors (CI runs this too)
 ```
 
 ## Git workflow

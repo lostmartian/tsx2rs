@@ -1,0 +1,26 @@
+{
+  "name": "@tsx2rs/native",
+  "version": "0.0.0",
+  "private": true,
+  "description": "tsx2rs native binary: the Rust compiler and engine for Node.js",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lostmartian/tsx2rs.git",
+    "directory": "packages/native"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "napi": {
+    "binaryName": "tsx2rs"
+  },
+  "scripts": {
+    "build": "napi build --platform --release --esm --manifest-path ../../crates/napi/Cargo.toml --package-json-path package.json --output-dir binding --js index.js --dts index.d.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.10.9"
+  }
+}
