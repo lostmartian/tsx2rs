@@ -6,3 +6,5 @@ packages/native/binding/
 *.md
 .next/
 next-env.d.ts
+# Vendored third-party test apps
+tests/apps/

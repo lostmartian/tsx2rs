@@ -10,7 +10,7 @@ pre-commit:
       run: pnpm exec prettier --check {staged_files}
     - name: eslint
       glob: "*.{js,ts}"
-      run: pnpm exec eslint --max-warnings 0 {staged_files}
+      run: pnpm exec eslint --max-warnings 0 --no-warn-ignored {staged_files}
 
 commit-msg:
   jobs:
