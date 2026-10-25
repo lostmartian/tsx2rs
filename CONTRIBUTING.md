@@ -84,6 +84,12 @@ Types are the same as for commits (below).
   - review approval (once there is more than one maintainer)
   - conversations resolved
 - **Merge method:** **squash merge** only, which keeps `main` linear. The branch is deleted after merge.
+- **Stacked PRs** (a PR whose base is another PR's branch) are merged one at a time, bottom first:
+  1. Merge the bottom PR into `main` and delete its branch.
+  2. Wait until the next PR's base shows `main`. The author then rebases it onto `main`, because the squash replaced the bottom PR's commits.
+  3. Merge it only after its CI is green against `main`.
+
+  Never merge a PR whose base is not `main`: it lands in the other branch, not in `main`. This happened with #5; #8 re-landed it.
 - **Never** force-push `main`, rewrite published history, or merge with failing checks.
 
 ### Releases (from the first public version)
