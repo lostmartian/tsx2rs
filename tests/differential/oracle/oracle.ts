@@ -27,7 +27,14 @@ export type Tree =
   | { b: string }
   | Tree[]
   | { t: string; a: [string, AttributeValue][]; c: Tree[] };
-type AttributeValue = string | boolean | null | { u: 1 } | { n: string } | { b: string };
+type AttributeValue =
+  | string
+  | boolean
+  | null
+  | { u: 1 }
+  | { n: string }
+  | { b: string }
+  | { s: [string, AttributeValue][] };
 
 const require = createRequire(import.meta.url);
 
@@ -43,6 +50,7 @@ function toValue(value: AttributeValue): unknown {
   if (value === null || typeof value !== "object") return value;
   if ("n" in value) return Number(value.n);
   if ("b" in value) return BigInt(value.b);
+  if ("s" in value) return Object.fromEntries(value.s.map(([k, v]) => [k, toValue(v)]));
   return undefined;
 }
 
