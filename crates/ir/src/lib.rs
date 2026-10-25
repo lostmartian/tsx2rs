@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod attribute;
 mod format;
 pub mod input;
 mod program;
