@@ -14,6 +14,8 @@ pub enum Code {
     UnresolvedImport,
     /// A dynamic `import()`: the module graph can't be known at build time.
     DynamicImport,
+    /// A component element whose component can't be classified as server, client or built-in.
+    UnknownComponent,
 }
 
 impl Code {
@@ -24,6 +26,7 @@ impl Code {
             Self::ParseError => "TSX2RS_E0001",
             Self::UnresolvedImport => "TSX2RS_E0002",
             Self::DynamicImport => "TSX2RS_E0003",
+            Self::UnknownComponent => "TSX2RS_E0004",
         }
     }
 }

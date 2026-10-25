@@ -1,0 +1,78 @@
+---
+source: crates/compiler/tests/commerce.rs
+expression: "describe(\"app/product/[handle]/page.tsx\")"
+---
+modules:
+  app/product/[handle]/page.tsx [server]
+    components/grid/tile -> components/grid/tile.tsx
+    components/layout/footer -> components/layout/footer.tsx
+    components/product/gallery -> components/product/gallery.tsx
+    components/product/product-description -> components/product/product-description.tsx
+    lib/constants -> lib/constants.ts
+    lib/shopify -> lib/shopify/index.ts
+    next/link -> package next/link
+    next/navigation -> package next/navigation
+    react -> package react
+  components/grid/tile.tsx [server]
+    clsx -> package clsx
+    next/image -> package next/image
+    ../label -> components/label.tsx
+  components/layout/footer.tsx [server]
+    next/link -> package next/link
+    components/layout/footer-menu -> components/layout/footer-menu.tsx
+    components/logo-square -> components/logo-square.tsx
+    lib/shopify -> lib/shopify/index.ts
+    react -> package react
+  components/product/gallery.tsx [client]
+  components/product/product-description.tsx [server]
+    components/cart/add-to-cart -> components/cart/add-to-cart.tsx
+    components/price -> components/price.tsx
+    components/prose -> components/prose.tsx
+    lib/shopify/types -> lib/shopify/types.ts
+    ./variant-selector -> components/product/variant-selector.tsx
+  lib/constants.ts [server]
+  lib/shopify/index.ts [server]
+    lib/constants -> lib/constants.ts
+    next/cache -> package next/cache
+    next/headers -> package next/headers
+    next/server -> package next/server
+    ./fixtures -> lib/shopify/fixtures.ts
+  components/label.tsx [server]
+    clsx -> package clsx
+    ./price -> components/price.tsx
+  components/layout/footer-menu.tsx [client]
+  components/logo-square.tsx [server]
+    clsx -> package clsx
+    ./icons/logo -> components/icons/logo.tsx
+  components/cart/add-to-cart.tsx [client]
+  components/price.tsx [server]
+    clsx -> package clsx
+  components/prose.tsx [server]
+    clsx -> package clsx
+  lib/shopify/types.ts [server]
+  components/product/variant-selector.tsx [client]
+  lib/shopify/fixtures.ts [server]
+  components/icons/logo.tsx [server]
+    clsx -> package clsx
+components:
+  app/product/[handle]/page.tsx: <Suspense> -> react Suspense [fallback={expr}] +children
+  app/product/[handle]/page.tsx: <Gallery> -> CLIENT components/product/gallery.tsx#Gallery [images={expr}]
+  app/product/[handle]/page.tsx: <Suspense> -> react Suspense [fallback=null] +children
+  app/product/[handle]/page.tsx: <ProductDescription> -> server components/product/product-description.tsx#ProductDescription [product={expr}]
+  app/product/[handle]/page.tsx: <RelatedProducts> -> local [id={expr}]
+  app/product/[handle]/page.tsx: <Footer> -> server components/layout/footer.tsx#default []
+  app/product/[handle]/page.tsx: <Link> -> CLIENT next/link#default [className="relative h-full w-full" href={expr} prefetch=true] +children
+  app/product/[handle]/page.tsx: <GridTileImage> -> server components/grid/tile.tsx#GridTileImage [alt={expr} label={expr} src={expr} fill=true sizes="(min-width: 1024px) 20vw, (min-width: 768px) 25vw, (min-width: 640px) 33vw, (min-width: 475px) 50vw, 100vw"]
+  components/grid/tile.tsx: <Image> -> CLIENT next/image#default [className={expr} {...spread}]
+  components/grid/tile.tsx: <Label> -> server components/label.tsx#default [title={expr} amount={expr} currencyCode={expr} position={expr}]
+  components/layout/footer.tsx: <Link> -> CLIENT next/link#default [className="flex items-center gap-2 text-black md:pt-1 dark:text-white" href="/"] +children
+  components/layout/footer.tsx: <LogoSquare> -> server components/logo-square.tsx#default [size="sm"]
+  components/layout/footer.tsx: <Suspense> -> react Suspense [fallback={expr}] +children
+  components/layout/footer.tsx: <FooterMenu> -> CLIENT components/layout/footer-menu.tsx#default [menu={expr}]
+  components/product/product-description.tsx: <Price> -> server components/price.tsx#default [amount={expr} currencyCode={expr}]
+  components/product/product-description.tsx: <VariantSelector> -> CLIENT components/product/variant-selector.tsx#VariantSelector [options={expr} variants={expr}]
+  components/product/product-description.tsx: <Prose> -> server components/prose.tsx#default [className="mb-6 text-sm leading-tight dark:text-white/[60%]" html={expr}]
+  components/product/product-description.tsx: <AddToCart> -> CLIENT components/cart/add-to-cart.tsx#AddToCart [product={expr}]
+  components/label.tsx: <Price> -> server components/price.tsx#default [className="flex-none rounded-full bg-blue-600 p-2 text-white" amount={expr} currencyCode={expr} currencyCodeClassName="hidden @[275px]/label:inline"]
+  components/logo-square.tsx: <LogoIcon> -> server components/icons/logo.tsx#default [className={expr}]
+diagnostics:

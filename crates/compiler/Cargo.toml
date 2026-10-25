@@ -16,6 +16,7 @@ oxc_parser.workspace = true
 oxc_resolver.workspace = true
 oxc_span.workspace = true
 oxc_syntax.workspace = true
+ryu-js.workspace = true
 thiserror.workspace = true
 tsx2rs_ir.workspace = true
 

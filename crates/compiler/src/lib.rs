@@ -6,8 +6,10 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod component;
 pub mod diagnostic;
 pub mod graph;
+pub mod usage;
 
 /// The template-program format version this compiler emits.
 #[must_use]

@@ -3,42 +3,15 @@
 // Tests may unwrap (docs/engineering/code-standards.md); this covers helpers outside #[test] fns.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::path::Path;
+
+use common::Project;
 
 use tsx2rs_compiler::diagnostic::Code;
 use tsx2rs_compiler::graph::{Imported, ModuleGraph, ModuleKind, Target, build};
-
-/// A project in a fresh temporary folder, removed when dropped.
-struct Project {
-    root: PathBuf,
-}
-
-impl Project {
-    fn new(files: &[(&str, &str)]) -> Self {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!("tsx2rs-graph-{}-{n}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        for (path, source) in files {
-            let file = root.join(path);
-            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-            std::fs::write(file, source).unwrap();
-        }
-        Self { root }
-    }
-
-    fn graph(&self, entry: &str) -> ModuleGraph {
-        build(&self.root, Path::new(entry)).unwrap()
-    }
-}
-
-impl Drop for Project {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
-    }
-}
 
 /// One line per module (`path [kind]`), then one indented line per import.
 fn summary(graph: &ModuleGraph) -> String {

@@ -15,8 +15,11 @@ use oxc_resolver::{
     ResolveOptions, Resolver, TsconfigDiscovery, TsconfigOptions, TsconfigReferences,
 };
 use oxc_span::SourceType;
-use oxc_syntax::module_record::ImportImportName;
+use oxc_syntax::module_record::{
+    ExportExportName, ExportImportName, ImportImportName, ModuleRecord,
+};
 
+use crate::component::ComponentUse;
 use crate::diagnostic::{Code, Diagnostic};
 
 /// Index into [`ModuleGraph::modules`].
@@ -43,6 +46,32 @@ pub struct Module {
     pub kind: ModuleKind,
     /// Its import and re-export statements, in source order (only for parsed server modules).
     pub imports: Vec<Import>,
+    /// What it exports (only for parsed server modules).
+    pub exports: Exports,
+    /// The component elements in its JSX, in source order (only for parsed server modules).
+    pub component_uses: Vec<ComponentUse>,
+}
+
+/// A module's exports: defined in it, or re-exported from another module.
+#[derive(Debug, Default)]
+pub struct Exports {
+    /// Names defined in the module (`default` for the default export).
+    pub local: Vec<String>,
+    /// `export { a as b } from "./x"` and `export * as ns from "./x"`.
+    pub reexports: Vec<Reexport>,
+    /// Specifiers of `export * from "./x"`.
+    pub star: Vec<String>,
+}
+
+/// A named re-export.
+#[derive(Debug)]
+pub struct Reexport {
+    /// The name this module exports.
+    pub exported: String,
+    /// What it refers to in the other module (`Namespace` for `export * as ns`).
+    pub imported: Imported,
+    /// The other module's specifier (an entry of [`Module::imports`] has the same specifier).
+    pub specifier: String,
 }
 
 /// An import or re-export statement.
@@ -219,6 +248,8 @@ impl Builder {
             path: self.relative(path),
             kind: ModuleKind::Server,
             imports: Vec::new(),
+            exports: Exports::default(),
+            component_uses: Vec::new(),
         });
         self.paths.push(path.to_path_buf());
         self.by_path.insert(path.to_path_buf(), id);
@@ -291,6 +322,8 @@ impl Builder {
             );
         }
 
+        self.modules[id.0].exports = exports(&module_record);
+        self.modules[id.0].component_uses = crate::component::collect(&program);
         let statements = statements(&module_record);
 
         let dir = path
@@ -361,7 +394,7 @@ impl Builder {
 
 /// The module's import and re-export statements in source order, with their bindings.
 /// `requested_modules` covers side-effect imports and re-exports too.
-fn statements(module_record: &oxc_syntax::module_record::ModuleRecord<'_>) -> Vec<Statement> {
+fn statements(module_record: &ModuleRecord<'_>) -> Vec<Statement> {
     let mut statements: Vec<Statement> = Vec::new();
     for (specifier, requests) in &module_record.requested_modules {
         for request in requests {
@@ -392,4 +425,53 @@ fn statements(module_record: &oxc_syntax::module_record::ModuleRecord<'_>) -> Ve
     }
     statements.sort_by_key(|s| s.start);
     statements
+}
+
+/// The module's exports, from its module record.
+fn exports(module_record: &ModuleRecord<'_>) -> Exports {
+    let name = |n: &ExportExportName<'_>| match n {
+        ExportExportName::Name(n) => Some(n.name.as_str().to_owned()),
+        ExportExportName::Default(_) => Some("default".to_owned()),
+        ExportExportName::Null => None,
+    };
+    let mut exports = Exports::default();
+    for entry in module_record
+        .local_export_entries
+        .iter()
+        .filter(|e| !e.is_type)
+    {
+        exports.local.extend(name(&entry.export_name));
+    }
+    for entry in module_record
+        .indirect_export_entries
+        .iter()
+        .filter(|e| !e.is_type)
+    {
+        let (Some(exported), Some(request)) = (name(&entry.export_name), &entry.module_request)
+        else {
+            continue;
+        };
+        let imported = match &entry.import_name {
+            ExportImportName::Name(n) if n.name.as_str() == "default" => Imported::Default,
+            ExportImportName::Name(n) => Imported::Named(n.name.as_str().to_owned()),
+            ExportImportName::All | ExportImportName::AllButDefault | ExportImportName::Null => {
+                Imported::Namespace
+            }
+        };
+        exports.reexports.push(Reexport {
+            exported,
+            imported,
+            specifier: request.name.as_str().to_owned(),
+        });
+    }
+    for entry in module_record
+        .star_export_entries
+        .iter()
+        .filter(|e| !e.is_type)
+    {
+        if let Some(request) = &entry.module_request {
+            exports.star.push(request.name.as_str().to_owned());
+        }
+    }
+    exports
 }
