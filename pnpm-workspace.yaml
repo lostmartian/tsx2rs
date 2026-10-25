@@ -1,5 +1,15 @@
 packages:
   - packages/*
   - tests/identity
+  - tests/fixtures/*
+
+# Versions shared by every fixture app: tsx2rs is checked against exactly these.
+catalog:
+  next: 16.4.3
+  react: 19.3.1
+  react-dom: 19.3.1
+  "@types/react": 19.3.0
+  "@types/react-dom": 19.3.0
+
 allowBuilds:
   lefthook: true
