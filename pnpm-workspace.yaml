@@ -1,6 +1,7 @@
 packages:
   - packages/*
   - tests/identity
+  - tests/differential
   - tests/fixtures/*
 
 # Versions shared by every fixture app: tsx2rs is checked against exactly these.
@@ -10,6 +11,7 @@ catalog:
   react-dom: 19.3.1
   "@types/react": 19.3.0
   "@types/react-dom": 19.3.0
+  react-server-dom-webpack: 19.3.1
 
 allowBuilds:
   lefthook: true

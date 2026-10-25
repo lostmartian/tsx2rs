@@ -38,6 +38,7 @@ pnpm install          # JS dependencies + git hooks (lefthook)
 pnpm build:native     # build the Rust addon used by the JS packages
 pnpm check            # everything CI runs (scripts/check.sh)
 pnpm test:identity    # just the Next.js fixture tests (builds every fixture)
+cargo nextest run -p tsx2rs_differential   # just the engine-vs-React differential tests
 bash scripts/coverage.sh   # Rust coverage floors (CI runs this too)
 ```
 
