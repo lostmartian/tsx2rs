@@ -12,7 +12,7 @@ pub struct Output {
     /// The HTML.
     pub html: Vec<u8>,
     /// The Flight (RSC) payload text for the rendered template, not yet split into rows or
-    /// escaped for a `<script>`.
+    /// escaped for a `<script>` (see [`crate::script_string`]).
     pub flight: Vec<u8>,
 }
 

@@ -11,8 +11,10 @@ mod flight;
 mod html;
 mod input;
 mod render;
+mod script;
 
 pub use render::{MAX_VALUE_DEPTH, Output, render};
+pub use script::script_string;
 
 /// Why a render failed. The input is checked as it is read; a program is valid by construction
 /// ([`tsx2rs_ir::Program::new`]).
