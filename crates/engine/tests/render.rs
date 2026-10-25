@@ -486,8 +486,8 @@ fn attribute_objects_add_a_comma_only_after_props() {
 }
 
 #[test]
-fn attribute_objects_reject_style_and_content_but_not_their_absence() {
-    for name in ["style", "children", "dangerouslySetInnerHTML"] {
+fn attribute_objects_reject_content_but_not_its_absence() {
+    for name in ["children", "dangerouslySetInnerHTML"] {
         let present: [(&str, Write); 2] = [
             ("id", |w| {
                 w.tag(tag::NULL);
@@ -506,6 +506,166 @@ fn attribute_objects_reject_style_and_content_but_not_their_absence() {
         })];
         assert!(attributes(ElementRules::Generic, false, &absent).is_ok());
     }
+}
+
+/// Renders `<p` + `Op::Style` + `>`.
+fn style(write: impl FnOnce(&mut InputWriter)) -> Result<(String, String), RenderError> {
+    let p = Builder::default()
+        .stat("<p", "")
+        .op(Op::Style)
+        .stat(">", "")
+        .build();
+    let mut output = Output::new();
+    render(&p, &input(write), &mut output)?;
+    Ok((
+        String::from_utf8(output.html).unwrap(),
+        String::from_utf8(output.flight).unwrap(),
+    ))
+}
+
+#[test]
+fn writes_style_objects_like_react() {
+    let (html, flight) = style(|w| {
+        w.tag(tag::OBJECT).count(9);
+        w.string("backgroundColor").tag(tag::STRING).string(" red ");
+        w.string("width").tag(tag::NUMBER).number(10.0);
+        w.string("margin").tag(tag::NUMBER).number(0.0);
+        w.string("opacity").tag(tag::NUMBER).number(0.5);
+        w.string("WebkitTransition")
+            .tag(tag::STRING)
+            .string("all 1s");
+        w.string("msFlex").tag(tag::NUMBER).number(1.0);
+        w.string("--gap").tag(tag::NUMBER).number(4.0);
+        w.string("content").tag(tag::STRING).string("\"<a>\"");
+        w.string("zIndex").tag(tag::BIGINT).string("3");
+    })
+    .unwrap();
+    assert_eq!(
+        html,
+        r#"<p style="background-color:red;width:10px;margin:0;opacity:0.5;-webkit-transition:all 1s;-ms-flex:1;--gap:4;content:&quot;&lt;a&gt;&quot;;z-index:3">"#
+    );
+    assert_eq!(
+        flight,
+        r#"{"backgroundColor":" red ","width":10,"margin":0,"opacity":0.5,"WebkitTransition":"all 1s","msFlex":1,"--gap":4,"content":"\"<a>\"","zIndex":"$n3"}"#
+    );
+}
+
+#[test]
+fn skips_empty_style_entries_and_writes_no_attribute_when_none_is_left() {
+    let (html, flight) = style(|w| {
+        w.tag(tag::OBJECT).count(5);
+        w.string("color").tag(tag::NULL);
+        w.string("top").tag(tag::UNDEFINED);
+        w.string("left").tag(tag::TRUE);
+        w.string("right").tag(tag::FALSE);
+        w.string("bottom").tag(tag::STRING).string("");
+    })
+    .unwrap();
+    assert_eq!(html, "<p>");
+    assert_eq!(
+        flight,
+        r#"{"color":null,"top":"$undefined","left":true,"right":false,"bottom":""}"#
+    );
+    // Whitespace isn't empty: it's written, trimmed.
+    let (html, _) = style(|w| {
+        w.tag(tag::OBJECT).count(1);
+        w.string("color").tag(tag::STRING).string("  ");
+    })
+    .unwrap();
+    assert_eq!(html, r#"<p style="color:">"#);
+    assert_eq!(
+        style(|w| {
+            w.tag(tag::OBJECT).count(0);
+        })
+        .unwrap(),
+        ("<p>".into(), "{}".into())
+    );
+}
+
+#[test]
+fn writes_nothing_for_a_missing_style_and_rejects_one_that_is_not_an_object() {
+    assert_eq!(
+        style(|w| {
+            w.tag(tag::NULL);
+        })
+        .unwrap(),
+        ("<p>".into(), "null".into())
+    );
+    assert_eq!(
+        style(|w| {
+            w.tag(tag::UNDEFINED);
+        })
+        .unwrap(),
+        ("<p>".into(), r#""$undefined""#.into())
+    );
+    let primitives: [Write; 5] = [
+        |w| {
+            w.tag(tag::STRING).string("color:red");
+        },
+        |w| {
+            w.tag(tag::NUMBER).number(1.0);
+        },
+        |w| {
+            w.tag(tag::TRUE);
+        },
+        |w| {
+            w.tag(tag::FALSE);
+        },
+        |w| {
+            w.tag(tag::BIGINT).string("1");
+        },
+    ];
+    for write in primitives {
+        assert_eq!(style(write), Err(RenderError::InvalidValue { offset: 0 }));
+    }
+    assert_eq!(
+        style(|w| {
+            w.tag(tag::ARRAY).count(0);
+        }),
+        Err(RenderError::BadTag {
+            offset: 0,
+            tag: tag::ARRAY
+        })
+    );
+    // An entry's value must be a primitive (nested objects aren't written by React's rules).
+    assert!(matches!(
+        style(|w| {
+            w.tag(tag::OBJECT).count(1);
+            w.string("color").tag(tag::OBJECT).count(0);
+        }),
+        Err(RenderError::BadTag { .. })
+    ));
+}
+
+#[test]
+fn attribute_objects_write_style_in_place() {
+    let props: [(&str, Write); 3] = [
+        ("id", |w| {
+            w.tag(tag::STRING).string("a");
+        }),
+        ("style", |w| {
+            w.tag(tag::OBJECT).count(1);
+            w.string("fontSize").tag(tag::NUMBER).number(12.0);
+        }),
+        ("title", |w| {
+            w.tag(tag::STRING).string("t");
+        }),
+    ];
+    assert_eq!(
+        attributes(ElementRules::Generic, false, &props).unwrap(),
+        (
+            r#" id="a" style="font-size:12px" title="t""#.into(),
+            r#""id":"a","style":{"fontSize":12},"title":"t""#.into()
+        )
+    );
+    let not_an_object: [(&str, Write); 1] = [("style", |w| {
+        w.tag(tag::STRING).string("color:red");
+    })];
+    // The value's tag is after the count (4) and "style" (4 + 5).
+    assert_eq!(
+        attributes(ElementRules::Generic, false, &not_an_object),
+        Err(RenderError::InvalidValue { offset: 13 })
+    );
 }
 
 #[test]
@@ -990,8 +1150,8 @@ proptest! {
         let name = b.chunk("a");
         let every_op = b.op(Op::Value).op(Op::Child).op(Op::Island).op(Op::RawHtml).op(Op::Number)
             .op(Op::Prop { name, kind: Kind::PositiveNumber }).op(Op::Prop { name, kind: Kind::Url })
-            .op(Op::Attributes { rules: ElementRules::Anchor, comma_after: true })
-            .op(Op::If { else_: OpIndex(10) }).op(Op::Text).build();
+            .op(Op::Attributes { rules: ElementRules::Anchor, comma_after: true }).op(Op::Style)
+            .op(Op::If { else_: OpIndex(11) }).op(Op::Text).build();
         let _ = render(&every_op, &bytes, &mut Output::new());
     }
 }

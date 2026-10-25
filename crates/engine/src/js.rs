@@ -8,7 +8,7 @@
 /// literals beyond 2^53 may differ in their last bits; React only uses the result for `isNaN` and
 /// `1 <= value`, which they never change.
 pub(crate) fn string_to_number(s: &str) -> f64 {
-    let s = s.trim_matches(is_js_whitespace);
+    let s = trim(s);
     if s.is_empty() {
         return 0.0;
     }
@@ -77,6 +77,11 @@ fn is_decimal_literal(s: &[u8]) -> bool {
         return exponent > 0 && exponent == after.len();
     }
     rest.is_empty()
+}
+
+/// `String.prototype.trim`.
+pub(crate) fn trim(s: &str) -> &str {
+    s.trim_matches(is_js_whitespace)
 }
 
 /// JavaScript's `WhiteSpace` and `LineTerminator` (what `String.prototype.trim` removes).
