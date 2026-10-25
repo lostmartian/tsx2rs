@@ -13,6 +13,8 @@ export default defineConfig(
       "**/.next/",
       "**/next-env.d.ts",
       "packages/native/binding/",
+      // Vendored third-party test apps
+      "tests/apps/",
     ],
   },
   eslint.configs.recommended,
