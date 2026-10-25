@@ -33,7 +33,8 @@ pub enum Tree {
 pub struct Element {
     /// The tag.
     pub tag: &'static str,
-    /// Props in order (unique names): React prop name and value.
+    /// Props in order (unique names): React prop name and value. A `style` prop's value is a
+    /// [`Value::Style`], `null` or `undefined`.
     pub props: Vec<(String, Value)>,
     /// Whether the props come from a spread (`<div {...props}>`): the compiler doesn't know
     /// their names, so they're lowered to one `Op::Attributes`. Otherwise each prop is an
@@ -66,6 +67,8 @@ pub enum Value {
     Null,
     /// `undefined`
     Undefined,
+    /// A `style` object: CSS property names and primitive values, in order (unique names).
+    Style(Vec<(String, Value)>),
 }
 
 /// Tags whose props follow React DOM's generic rules, plus `a` (the only difference: `href=""`
@@ -190,14 +193,7 @@ impl Tree {
                     out.push('[');
                     json_string(out, name);
                     out.push(',');
-                    match value {
-                        Value::String(s) => json_string(out, s),
-                        Value::Number(n) => number_json(out, *n),
-                        Value::BigInt(digits) => bigint_json(out, digits),
-                        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-                        Value::Null => out.push_str("null"),
-                        Value::Undefined => out.push_str(r#"{"u":1}"#),
-                    }
+                    value_json(out, value);
                     out.push(']');
                 }
                 out.push_str(r#"],"c":["#);
@@ -209,6 +205,31 @@ impl Tree {
                 }
                 out.push_str("]}");
             }
+        }
+    }
+}
+
+fn value_json(out: &mut String, value: &Value) {
+    match value {
+        Value::String(s) => json_string(out, s),
+        Value::Number(n) => number_json(out, *n),
+        Value::BigInt(digits) => bigint_json(out, digits),
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::Null => out.push_str("null"),
+        Value::Undefined => out.push_str(r#"{"u":1}"#),
+        Value::Style(entries) => {
+            out.push_str(r#"{"s":["#);
+            for (i, (name, value)) in entries.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push('[');
+                json_string(out, name);
+                out.push(',');
+                value_json(out, value);
+                out.push(']');
+            }
+            out.push_str("]}");
         }
     }
 }
@@ -355,7 +376,85 @@ fn prop_name() -> impl Strategy<Value = String> {
     ]
 }
 
+/// CSS property names covering React's naming rules: camelCase, vendor prefixes (`Webkit`,
+/// `Moz`, `ms`), unitless properties, custom properties, escaping and non-ASCII case mapping.
+const STYLE_NAMES: &[&str] = &[
+    "color",
+    "backgroundColor",
+    "width",
+    "margin",
+    "fontSize",
+    "lineHeight",
+    "opacity",
+    "zIndex",
+    "flex",
+    "flexGrow",
+    "gridRow",
+    "strokeWidth",
+    "WebkitTransition",
+    "WebkitLineClamp",
+    "MozBoxFlex",
+    "msTransform",
+    "msFlex",
+    "WebKitBoxFlexGroup",
+    "MsTransform",
+    "XMLHttp",
+    "--gap",
+    "--My-Var",
+    "content",
+    "a\"b<",
+    "ÄpfelGröße",
+    "ΟΔΟΣ",
+];
+
+fn style_value() -> impl Strategy<Value = Value> {
+    let css = prop::sample::select(vec![" 1em ", "  ", "", "red", "calc(1px + 2%)", "'a'"])
+        .prop_map(|s| Value::String(s.to_owned()));
+    prop_oneof![
+        3 => css,
+        2 => text().prop_map(Value::String),
+        3 => number().prop_map(Value::Number),
+        1 => bigint().prop_map(Value::BigInt),
+        1 => any::<bool>().prop_map(Value::Bool),
+        1 => Just(Value::Null),
+        1 => Just(Value::Undefined),
+    ]
+}
+
+/// A `style` prop: usually an object, sometimes `null` or `undefined`.
+fn style() -> impl Strategy<Value = Value> {
+    let name = prop_oneof![
+        4 => prop::sample::select(STYLE_NAMES).prop_map(str::to_owned),
+        1 => "-?[a-zA-Z]{1,8}",
+    ];
+    let object = prop::collection::vec((name, style_value()), 0..5).prop_map(|mut entries| {
+        let mut seen = std::collections::HashSet::new();
+        entries.retain(|(name, _)| seen.insert(name.clone()));
+        Value::Style(entries)
+    });
+    prop_oneof![
+        6 => object,
+        1 => Just(Value::Null),
+        1 => Just(Value::Undefined),
+    ]
+}
+
 fn props() -> impl Strategy<Value = Vec<(String, Value)>> {
+    let with_style = (
+        named_props(),
+        prop::option::weighted(0.3, style()),
+        any::<prop::sample::Index>(),
+    );
+    with_style.prop_map(|(mut props, style, at)| {
+        if let Some(style) = style {
+            let at = at.index(props.len() + 1);
+            props.insert(at, ("style".to_owned(), style));
+        }
+        props
+    })
+}
+
+fn named_props() -> impl Strategy<Value = Vec<(String, Value)>> {
     prop::collection::vec(prop_name(), 0..6).prop_flat_map(|mut names| {
         let mut seen = std::collections::HashSet::new();
         names.retain(|n| {
