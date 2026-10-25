@@ -227,7 +227,11 @@ class FlightDecoder {
   /** Parsed JSON of model rows, by id. */
   private readonly parsed = new Map<string, unknown>();
 
-  constructor(private readonly rows: ReadonlyMap<string, Row>) {}
+  private readonly rows: ReadonlyMap<string, Row>;
+
+  constructor(rows: ReadonlyMap<string, Row>) {
+    this.rows = rows;
+  }
 
   /** Row `id`, fully decoded. */
   row(id: string, path: readonly string[]): Decoded {
