@@ -16,5 +16,6 @@ step "TypeScript: types";   pnpm typecheck && pnpm exec tsc -p tsconfig.json
 step "TypeScript: lint";    pnpm lint
 step "Format";              pnpm format:check
 step "TypeScript: tests";   pnpm test
+step "Identity: Next.js fixtures"; pnpm test:identity
 
 printf '\n\033[1;32mAll checks passed.\033[0m\n'
