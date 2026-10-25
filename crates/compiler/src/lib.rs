@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod component;
 pub mod diagnostic;
 pub mod graph;
 
