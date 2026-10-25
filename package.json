@@ -7,6 +7,7 @@
     "node": ">=24.19.0"
   },
   "scripts": {
+    "prepare": "lefthook install",
     "build:native": "pnpm --filter @tsx2rs/native build",
     "typecheck": "pnpm -r --parallel typecheck",
     "lint": "eslint . --max-warnings 0",
@@ -17,10 +18,14 @@
     "check": "bash scripts/check.sh"
   },
   "devDependencies": {
+    "@commitlint/cli": "21.2.4",
+    "@commitlint/config-conventional": "21.2.4",
+    "@commitlint/types": "21.2.3",
     "@eslint/js": "10.0.1",
     "@types/node": "24.19.2",
     "@vitest/coverage-v8": "5.0.5",
     "eslint": "10.13.0",
+    "lefthook": "2.2.2",
     "prettier": "3.9.10",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.0",

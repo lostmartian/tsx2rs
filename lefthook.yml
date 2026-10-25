@@ -1,0 +1,18 @@
+# Local git hooks (convenience; CI is the source of truth). Installed by `pnpm install`.
+pre-commit:
+  parallel: true
+  jobs:
+    - name: rustfmt
+      glob: "*.rs"
+      run: cargo fmt --all --check
+    - name: prettier
+      glob: "*.{js,ts,json,yml,yaml}"
+      run: pnpm exec prettier --check {staged_files}
+    - name: eslint
+      glob: "*.{js,ts}"
+      run: pnpm exec eslint --max-warnings 0 {staged_files}
+
+commit-msg:
+  jobs:
+    - name: commitlint
+      run: pnpm exec commitlint --edit {1}
