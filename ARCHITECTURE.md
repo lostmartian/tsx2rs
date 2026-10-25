@@ -28,8 +28,13 @@ tsx2rs is a **Next.js Deployment Adapter**. A Next.js app turns it on with one l
 
 ## Code map
 
-### `crates/ir` *(planned)*
-The shared vocabulary: template IR, data schema (field shapes the encoder writes and the engine reads), and the **template-program binary format** (magic, version, sections). It has no dependencies on other crates and does no I/O. Both the compiler and the engine depend on it; nothing else defines these types.
+### `crates/ir`
+The shared vocabulary.
+- **`Program`:** a chunk table plus semantic ops: static output, text, number, string and boolean attributes, raw HTML, generic values, islands, loops, branches.
+- **Its binary format:** magic, version, chunks, ops.
+- **The input format** the generated encoder writes (`ir::input`): values in program order, as length-prefixed UTF-8, `f64`, tags and counts.
+
+`Program::new` validates every structural rule the engine relies on, and decoding goes through it. The crate has no dependencies on other crates of ours and does no I/O. The compiler and the engine both depend on it, and nothing else defines these types. *(The template IR and data schema used inside the compiler are planned.)*
 
 ### `crates/compiler` *(planned)*
 Source → IR → program, in phases with one module each:
@@ -44,8 +49,11 @@ Source → IR → program, in phases with one module each:
 
 Each phase is a pure function of its input. Unsupported constructs produce a **diagnostic** (stable code, message, source span) that makes the route fall back. The compiler never guesses.
 
-### `crates/engine` *(planned)*
-Runs template programs: copies static chunks and executes ops against the encoded input. It writes HTML by React's server rendering rules and Flight rows by React's Flight rules. Escaping lives here and only here. It validates every input buffer (bounds, UTF-8) and reports a typed error instead of panicking.
+### `crates/engine`
+Runs template programs.
+- **One pass, two outputs:** it walks the ops once, reading each input value once, and writes HTML by React DOM's server rules and Flight by React's Flight rules at the same time.
+- **Escaping lives here and only here:** text and attributes, Flight strings, and Flight for inline `<script>` tags (`script_string`).
+- **Input is untrusted:** it is checked as it is read (lengths, tags, UTF-8, nesting depth, leftover bytes), and failures are typed errors, never panics.
 
 ### `crates/napi` *(planned)*
 The only bridge to Node.js (napi-rs). Thin: converts arguments, calls `compiler`/`engine`, maps errors. No logic. This is the only crate allowed `unsafe` (FFI), and it catches panics at the boundary.
