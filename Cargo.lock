@@ -495,6 +495,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ryu-js"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04d056b875a9d2e6cb9a61d127afee9ac5999b9f87bcb32079d1318e505be714"
+
+[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -621,6 +627,9 @@ dependencies = [
 name = "tsx2rs_engine"
 version = "0.0.0"
 dependencies = [
+ "proptest",
+ "ryu-js",
+ "thiserror",
  "tsx2rs_ir",
 ]
 
