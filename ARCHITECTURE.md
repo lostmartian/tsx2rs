@@ -36,18 +36,17 @@ The shared vocabulary.
 
 `Program::new` validates every structural rule the engine relies on, and decoding goes through it. The crate has no dependencies on other crates of ours and does no I/O. The compiler and the engine both depend on it, and nothing else defines these types. *(The template IR and data schema used inside the compiler are planned.)*
 
-### `crates/compiler` *(planned)*
-Source → IR → program, in phases with one module each:
+### `crates/compiler`
+Source → templates + data functions → programs, in phases with one module each ([ADR-0005](docs/adr/0005-compiling-server-components.md)):
 1. **Parse** (oxc)
 2. **Module graph** from a route entry
-3. **Server/client split** (`"use client"`)
-4. **Setup/template split** with lifting of non-compilable expressions
-5. **Schema inference**
-6. **Lowering** to IR
-7. **Program emission**
-8. **Encoder generation**
+3. **Component usage:** server, client and React built-in components (`"use client"`, re-exports)
+4. **Templates:** JSX in template positions becomes a template; other JSX stays real JSX and becomes an element value at runtime *(planned)*
+5. **Data functions:** span-based rewriting of the component's own code, with each returned JSX replaced by its hole values *(planned)*
+6. **Linking:** child components, slots and `Call` for recursion and runtime components *(planned)*
+7. **Lowering** to programs, and the **encoder** from the same traversal *(planned)*
 
-Each phase is a pure function of its input. Unsupported constructs produce a **diagnostic** (stable code, message, source span) that makes the route fall back. The compiler never guesses.
+Each phase is a pure function of its input. Its **diagnostics** have a stable code, a message, a source span and a severity: an *error* makes the route fall back, and a *note* names a part that React renders at request time. The compiler never guesses.
 
 ### `crates/engine`
 Runs template programs.
@@ -59,7 +58,9 @@ Runs template programs.
 The only bridge to Node.js (napi-rs). Thin: converts arguments, calls `compiler`/`engine`, maps errors. No logic. This is the only crate allowed `unsafe` (FFI), and it catches panics at the boundary.
 
 ### `packages/adapter` *(planned)*
-`@tsx2rs/adapter`: the Next.js Deployment Adapter. In `onBuildComplete` it runs the compiler, captures each compiled route's document and layout payload, and writes the **manifest** (versioned JSON: routes, programs, encoders, capture templates, fallback reasons).
+`@tsx2rs/adapter`: the Next.js Deployment Adapter.
+- **During the build,** a bundler transform (registered in `modifyConfig`) adds each server module's generated data functions to Next.js's own bundle, next to the unchanged original code.
+- **In `onBuildComplete`,** it links each route's programs, captures Next.js's wrapper (document, router tree, layout payload), and writes the **manifest**: versioned JSON listing routes, programs, wrapper templates and fallback reasons.
 
 ### `packages/runtime` *(planned)*
 `@tsx2rs/runtime`: the HTTP server.
@@ -83,11 +84,11 @@ The only bridge to Node.js (napi-rs). Thin: converts arguments, calls `compiler`
 ## Data flow of a compiled request
 
 1. The runtime resolves the route (`@next/routing`). If it isn't compiled, or the request is outside the compiled shape (e.g. per-visitor cookie, `rsc` navigation not yet compiled), it goes to Next.js.
-2. The route's setup code (the app's own data fetching, unchanged) runs and produces the values the template needs. Lifted expressions are evaluated here.
+2. Inside Next.js's request context, one **host render** (a React Flight render) runs the data phase. The route's data functions (the app's own code, unchanged) compute every hole value, in React's order. Parts that need React (hooks, uncompiled components, values the encoder doesn't support) are rendered by React in the same render.
 3. Client components are looked up in the island cache by a key of component, props and the contexts they read. On a miss, React renders them.
 4. The generated encoder writes all values into one reusable buffer: **one native call per flush** (ADR-0003).
 5. The engine runs the program and writes HTML and Flight into reusable output buffers.
-6. The runtime assembles the response from the captured document template and the engine's output, then streams the shell first and each `<Suspense>` boundary when its data resolves.
+6. The runtime assembles the response from the captured wrapper and the engine's output. It streams the shell first, then each `<Suspense>` boundary when its data resolves.
 
 ## Invariants
 
