@@ -39,16 +39,17 @@ fn accepts_a_program_with_every_op() {
         Op::RawHtml,
         Op::Value,
         Op::Child,
+        Op::Style,
         Op::Island,
         Op::Loop {
-            end: OpIndex(11),
+            end: OpIndex(12),
             separator: Some(ChunkId(1)),
         },
         Op::Text,
         Op::EndLoop,
-        Op::If { else_: OpIndex(15) },
+        Op::If { else_: OpIndex(16) },
         Op::Text,
-        Op::Jump { to: OpIndex(16) },
+        Op::Jump { to: OpIndex(17) },
         Op::Number,
     ];
     let program = Program::new(chunks(3), ops.clone()).unwrap();
@@ -368,7 +369,7 @@ enum Node {
 fn node() -> impl Strategy<Value = Node> {
     let leaf = prop_oneof![
         (0u32..3).prop_map(Node::Static),
-        (0u8..8).prop_map(Node::Read)
+        (0u8..9).prop_map(Node::Read)
     ];
     leaf.prop_recursive(4, 32, 4, |inner| {
         prop_oneof![
@@ -402,6 +403,7 @@ fn lower(nodes: &[Node], ops: &mut Vec<Op>) {
                 4 => Op::RawHtml,
                 5 => Op::Value,
                 6 => Op::Child,
+                7 => Op::Style,
                 _ => Op::Island,
             }),
             Node::Loop(body, sep) => {

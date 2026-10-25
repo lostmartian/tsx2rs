@@ -12,7 +12,7 @@
 //! bit 1 `text_end`), 1 `Text`, 2 `Number`, 3 `Prop` (name, then a [`Kind`] byte),
 //! 4 `Attributes` (an [`ElementRules`] byte, then a flags byte: bit 0 `comma_after`), 5
 //! `RawHtml`, 6 `Value`, 7 `Island`, 8 `Loop` (end, separator + 1 or 0 for none), 9 `EndLoop`,
-//! 10 `If` (else), 11 `Jump` (to), 12 `Child`. Decoding validates the program ([`Program::new`]), and encoding is
+//! 10 `If` (else), 11 `Jump` (to), 12 `Child`, 13 `Style`. Decoding validates the program ([`Program::new`]), and encoding is
 //! deterministic.
 
 use crate::attribute::{ElementRules, Kind};
@@ -34,6 +34,7 @@ const END_LOOP: u8 = 9;
 const IF: u8 = 10;
 const JUMP: u8 = 11;
 const CHILD: u8 = 12;
+const STYLE: u8 = 13;
 
 impl Program {
     /// Encodes the program in the binary format.
@@ -79,6 +80,7 @@ impl Program {
                 Op::RawHtml => out.push(RAW_HTML),
                 Op::Value => out.push(VALUE),
                 Op::Child => out.push(CHILD),
+                Op::Style => out.push(STYLE),
                 Op::Island => out.push(ISLAND),
                 Op::Loop { end, separator } => {
                     out.push(LOOP);
@@ -170,6 +172,7 @@ impl Program {
                 RAW_HTML => Op::RawHtml,
                 VALUE => Op::Value,
                 CHILD => Op::Child,
+                STYLE => Op::Style,
                 ISLAND => Op::Island,
                 LOOP => {
                     let end = OpIndex(r.u32()?);
