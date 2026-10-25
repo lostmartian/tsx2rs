@@ -70,7 +70,7 @@ Types are the same as for commits (below).
   - `build`: build system or dependencies
   - `ci`: CI config
   - `chore`: anything else
-- **Scopes:** a crate or package name (`engine`, `compiler`, `ir`, `napi`, `adapter`, `runtime`, `native`), or `repo`, `deps` (`deps-dev` for development dependencies, as Dependabot writes it), `bench`.
+- **Scopes:** a crate or package name (`engine`, `compiler`, `ir`, `napi`, `adapter`, `runtime`, `native`), `identity` (the test harness in `tests/identity`), or `repo`, `deps` (`deps-dev` for development dependencies, as Dependabot writes it), `bench`.
 - **One logical change per commit.** Don't mix formatting with behaviour changes. Each commit should build.
 - `commit-msg` hook (commitlint) and CI check the format.
 
