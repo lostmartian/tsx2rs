@@ -1,0 +1,31 @@
+# cargo-deny: supply-chain checks for the Rust workspace (run: cargo deny check).
+
+[graph]
+all-features = true
+
+[advisories]
+# Fail on any RustSec advisory (vulnerable, unmaintained, yanked, unsound).
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+# Licenses compatible with distributing tsx2rs under Apache-2.0. Only licenses our dependencies
+# actually use are listed; add one when a new dependency needs it (and say why in the PR).
+allow = [
+  "Apache-2.0",
+  "MIT",
+  "ISC",
+  "Unicode-3.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
