@@ -1,0 +1,15 @@
+[package]
+name = "tsx2rs_compiler"
+description = "Compiles Next.js server component templates into tsx2rs template programs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+tsx2rs_ir.workspace = true
+
+[lints]
+workspace = true
