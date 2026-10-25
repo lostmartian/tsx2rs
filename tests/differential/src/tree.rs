@@ -15,6 +15,15 @@ pub enum Tree {
     Null,
     /// `true` / `false` (React renders nothing for booleans).
     Bool(bool),
+    /// `undefined`
+    Undefined,
+    /// A bigint child: its decimal digits.
+    BigInt(String),
+    /// An array of nodes (React renders them in order).
+    Array(Vec<Self>),
+    /// A node known only at runtime: lowered to `Op::Child`, with the node as its input. Holds
+    /// only what `Op::Child` takes (no elements).
+    Hole(Box<Self>),
     /// A host element.
     Element(Element),
 }
@@ -99,6 +108,23 @@ impl Tree {
             }
             Self::Null => out.push_str("null"),
             Self::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            Self::Undefined => out.push_str(r#"{"u":1}"#),
+            Self::BigInt(digits) => {
+                out.push_str(r#"{"b":"#);
+                json_string(out, digits);
+                out.push('}');
+            }
+            Self::Array(nodes) => {
+                out.push('[');
+                for (i, node) in nodes.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    node.write_json(out);
+                }
+                out.push(']');
+            }
+            Self::Hole(node) => node.write_json(out), // React sees the value itself
             Self::Element(e) => {
                 out.push_str(r#"{"t":"#);
                 json_string(out, e.tag);
@@ -221,28 +247,60 @@ fn attributes() -> impl Strategy<Value = Vec<(&'static str, Attribute)>> {
     })
 }
 
-/// A random tree: elements (normal and void) with attributes, text, numbers, null and booleans.
-pub fn tree() -> impl Strategy<Value = Tree> {
-    let leaf = prop_oneof![
+/// Bigints: small, negative, zero and beyond 64 bits.
+fn bigint() -> impl Strategy<Value = String> {
+    prop_oneof![
+        3 => any::<i64>().prop_map(|n| n.to_string()),
+        1 => "-?[1-9][0-9]{19,40}",
+        1 => Just("0".to_owned()),
+    ]
+}
+
+/// The nodes a template can't know until runtime, as `Op::Child` reads them: primitives and
+/// arrays of them.
+fn primitive() -> impl Strategy<Value = Tree> {
+    prop_oneof![
         6 => text().prop_map(Tree::Text),
         2 => number().prop_map(Tree::Number),
+        1 => bigint().prop_map(Tree::BigInt),
         1 => Just(Tree::Null),
+        1 => Just(Tree::Undefined),
         1 => any::<bool>().prop_map(Tree::Bool),
+    ]
+}
+
+fn hole() -> impl Strategy<Value = Tree> {
+    primitive()
+        .prop_recursive(3, 16, 4, |inner| {
+            prop::collection::vec(inner, 0..4).prop_map(Tree::Array)
+        })
+        .prop_map(|node| Tree::Hole(Box::new(node)))
+}
+
+/// A random tree: elements (normal and void) with attributes; text, numbers, bigints, `null`,
+/// `undefined` and booleans; arrays; and runtime holes.
+pub fn tree() -> impl Strategy<Value = Tree> {
+    let leaf = prop_oneof![
+        11 => primitive(),
+        3 => hole(),
         1 => (prop::sample::select(VOID_TAGS), attributes())
             .prop_map(|(tag, attributes)| Tree::Element(Element { tag, attributes, children: vec![] })),
     ];
     leaf.prop_recursive(4, 48, 5, |inner| {
-        (
-            prop::sample::select(TAGS),
-            attributes(),
-            prop::collection::vec(inner, 0..5),
-        )
-            .prop_map(|(tag, attributes, children)| {
-                Tree::Element(Element {
-                    tag,
-                    attributes,
-                    children,
-                })
-            })
+        prop_oneof![
+            4 => (
+                prop::sample::select(TAGS),
+                attributes(),
+                prop::collection::vec(inner.clone(), 0..5),
+            )
+                .prop_map(|(tag, attributes, children)| {
+                    Tree::Element(Element {
+                        tag,
+                        attributes,
+                        children,
+                    })
+                }),
+            1 => prop::collection::vec(inner, 0..4).prop_map(Tree::Array),
+        ]
     })
 }
