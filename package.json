@@ -15,6 +15,7 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:identity": "vitest run --config tests/identity/vitest.e2e.config.ts",
     "check": "bash scripts/check.sh"
   },
   "devDependencies": {
