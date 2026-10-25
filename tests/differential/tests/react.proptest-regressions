@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 4a600405d96a358c9f52af1e1c566b62522c6b922343b1f53f59308e9f2dc92c # shrinks to tree = Element(Element { tag: "div", attributes: [], children: [Text("\""), Text("&")] })
+cc 573ce1a3a1bc81e9b9231297f9c100311d9819e0372a57b0d1d14c346453815d # shrinks to tree = Element(Element { tag: "div", attributes: [("title", String("$"))], children: [] })

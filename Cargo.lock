@@ -624,6 +624,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tsx2rs_differential"
+version = "0.0.0"
+dependencies = [
+ "proptest",
+ "tsx2rs_engine",
+ "tsx2rs_ir",
+]
+
+[[package]]
 name = "tsx2rs_engine"
 version = "0.0.0"
 dependencies = [
