@@ -1,6 +1,7 @@
 version: 2
 # Commit messages follow Conventional Commits so Dependabot PRs pass the PR-title check:
-# "build(deps): bump …" for Rust and npm, "ci(deps): bump …" for GitHub Actions.
+# "build(deps): bump …" for Rust and npm (Dependabot uses "deps-dev" for npm devDependencies),
+# "ci(deps): bump …" for GitHub Actions.
 updates:
   - package-ecosystem: cargo
     directory: /
@@ -16,6 +17,9 @@ updates:
       # typescript-eslint 8 supports TypeScript below 6.1 (see package.json)
       - dependency-name: typescript
         versions: [">=6.1.0"]
+      # Node.js type definitions follow the Node.js major in .node-version (24)
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
