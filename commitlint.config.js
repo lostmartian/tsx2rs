@@ -9,7 +9,19 @@ export default {
     "scope-enum": [
       RuleConfigSeverity.Error,
       "always",
-      ["engine", "compiler", "ir", "napi", "adapter", "runtime", "native", "repo", "deps", "bench"],
+      [
+        "engine",
+        "compiler",
+        "ir",
+        "napi",
+        "adapter",
+        "runtime",
+        "native",
+        "repo",
+        "deps",
+        "deps-dev",
+        "bench",
+      ],
     ],
   },
 };
