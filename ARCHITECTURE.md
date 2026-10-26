@@ -30,7 +30,7 @@ tsx2rs is a **Next.js Deployment Adapter**. A Next.js app turns it on with one l
 
 ### `crates/ir`
 The shared vocabulary.
-- **`Program`:** a chunk table plus semantic ops: static output, text, number, string and boolean attributes, raw HTML, generic values, islands, loops, branches.
+- **`Program`:** a chunk table plus semantic ops: static output, text, number, string and boolean attributes, raw HTML, generic values, runtime-typed children, islands, loops, branches.
 - **Its binary format:** magic, version, chunks, ops.
 - **The input format** the generated encoder writes (`ir::input`): values in program order, as length-prefixed UTF-8, `f64`, tags and counts.
 

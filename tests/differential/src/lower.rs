@@ -72,7 +72,64 @@ impl Lowering {
             }
             Tree::Null => self.markup("", "null"),
             Tree::Bool(b) => self.markup("", if *b { "true" } else { "false" }),
+            Tree::Undefined => self.markup("", r#""$undefined""#),
+            // A literal bigint: a static text node, as the compiler lowers `{12n}`.
+            Tree::BigInt(digits) => {
+                let (html, flight) = (self.chunk(digits), self.chunk(&format!(r#""$n{digits}""#)));
+                self.ops.push(Op::Static {
+                    html,
+                    flight,
+                    text_start: true,
+                    text_end: true,
+                });
+            }
+            Tree::Array(nodes) => {
+                self.markup("", "[");
+                for (i, node) in nodes.iter().enumerate() {
+                    if i > 0 {
+                        self.markup("", ",");
+                    }
+                    self.node(node);
+                }
+                self.markup("", "]");
+            }
+            Tree::Hole(node) => {
+                self.ops.push(Op::Child);
+                self.child_input(node);
+            }
             Tree::Element(e) => self.element(e),
+        }
+    }
+
+    /// A node as `Op::Child` reads it.
+    fn child_input(&mut self, node: &Tree) {
+        match node {
+            Tree::Text(s) => {
+                self.input.tag(tag::STRING).string(s);
+            }
+            Tree::Number(n) => {
+                self.input.tag(tag::NUMBER).number(*n);
+            }
+            Tree::BigInt(digits) => {
+                self.input.tag(tag::BIGINT).string(digits);
+            }
+            Tree::Null => {
+                self.input.tag(tag::NULL);
+            }
+            Tree::Undefined => {
+                self.input.tag(tag::UNDEFINED);
+            }
+            Tree::Bool(b) => {
+                self.input.tag(if *b { tag::TRUE } else { tag::FALSE });
+            }
+            Tree::Array(nodes) => {
+                self.input.tag(tag::ARRAY).count(nodes.len());
+                for node in nodes {
+                    self.child_input(node);
+                }
+            }
+            Tree::Hole(node) => self.child_input(node),
+            Tree::Element(_) => unreachable!("the generator puts no elements in holes"),
         }
     }
 

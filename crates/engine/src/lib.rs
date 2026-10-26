@@ -40,6 +40,12 @@ pub enum RenderError {
         /// The tag byte.
         tag: u8,
     },
+    /// A bigint whose string isn't canonical decimal digits.
+    #[error("bad bigint at byte {offset}")]
+    BadBigInt {
+        /// Where the bigint's string starts.
+        offset: usize,
+    },
     /// A condition byte other than 0 or 1.
     #[error("bad condition {value} at byte {offset}")]
     BadCondition {

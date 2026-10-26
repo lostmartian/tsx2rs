@@ -70,12 +70,19 @@ pub(crate) fn number(out: &mut Vec<u8>, n: f64) {
     }
 }
 
+/// Writes a bigint from its decimal digits: React's `"$n<digits>"`.
+pub(crate) fn bigint(out: &mut Vec<u8>, digits: &str) {
+    out.extend_from_slice(b"\"$n");
+    out.extend_from_slice(digits.as_bytes()); // digits and `-` need no JSON escaping
+    out.push(b'"');
+}
+
 /// `undefined`, as React encodes it.
 pub(crate) const UNDEFINED: &[u8] = b"\"$undefined\"";
 
 #[cfg(test)]
 mod tests {
-    use super::{key, number, string};
+    use super::{bigint, key, number, string};
 
     fn written(f: impl Fn(&mut Vec<u8>)) -> String {
         let mut out = Vec::new();
@@ -96,6 +103,15 @@ mod tests {
         assert_eq!(
             written(|o| string(o, "é ✓ \u{2028} <>&")),
             "\"é ✓ \u{2028} <>&\""
+        );
+    }
+
+    #[test]
+    fn encodes_bigints_like_react() {
+        assert_eq!(written(|o| bigint(o, "0")), r#""$n0""#);
+        assert_eq!(
+            written(|o| bigint(o, "-123456789012345678901234567890")),
+            r#""$n-123456789012345678901234567890""#
         );
     }
 

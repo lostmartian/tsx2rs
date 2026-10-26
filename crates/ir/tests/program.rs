@@ -31,16 +31,17 @@ fn accepts_a_program_with_every_op() {
         Op::BooleanAttribute { name: ChunkId(2) },
         Op::RawHtml,
         Op::Value,
+        Op::Child,
         Op::Island,
         Op::Loop {
-            end: OpIndex(10),
+            end: OpIndex(11),
             separator: Some(ChunkId(1)),
         },
         Op::Text,
         Op::EndLoop,
-        Op::If { else_: OpIndex(14) },
+        Op::If { else_: OpIndex(15) },
         Op::Text,
-        Op::Jump { to: OpIndex(15) },
+        Op::Jump { to: OpIndex(16) },
         Op::Number,
     ];
     let program = Program::new(chunks(3), ops.clone()).unwrap();
@@ -224,10 +225,11 @@ fn encodes_and_decodes_exactly() {
             Op::Island,
             Op::EndLoop,
             Op::Loop {
-                end: OpIndex(6),
+                end: OpIndex(7),
                 separator: Some(ChunkId(0)),
             },
             Op::Value,
+            Op::Child,
             Op::EndLoop,
         ],
     )
@@ -303,7 +305,7 @@ enum Node {
 fn node() -> impl Strategy<Value = Node> {
     let leaf = prop_oneof![
         (0u32..3).prop_map(Node::Static),
-        (0u8..7).prop_map(Node::Read)
+        (0u8..8).prop_map(Node::Read)
     ];
     leaf.prop_recursive(4, 32, 4, |inner| {
         prop_oneof![
@@ -330,6 +332,7 @@ fn lower(nodes: &[Node], ops: &mut Vec<Op>) {
                 3 => Op::BooleanAttribute { name: ChunkId(1) },
                 4 => Op::RawHtml,
                 5 => Op::Value,
+                6 => Op::Child,
                 _ => Op::Island,
             }),
             Node::Loop(body, sep) => {

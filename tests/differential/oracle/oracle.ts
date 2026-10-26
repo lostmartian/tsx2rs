@@ -19,7 +19,14 @@ import { Writable } from "node:stream";
 
 /** A generated React tree (see tests/differential/src/tree.rs for the generator). */
 export type Tree =
-  string | null | boolean | { n: string } | { t: string; a: [string, AttributeValue][]; c: Tree[] };
+  | string
+  | null
+  | boolean
+  | { n: string }
+  | { u: 1 }
+  | { b: string }
+  | Tree[]
+  | { t: string; a: [string, AttributeValue][]; c: Tree[] };
 type AttributeValue = string | boolean | null | { u: 1 };
 
 const require = createRequire(import.meta.url);
@@ -34,7 +41,10 @@ interface ReactModule {
 
 function toElement(react: ReactModule, tree: Tree): unknown {
   if (tree === null || typeof tree === "string" || typeof tree === "boolean") return tree;
+  if (Array.isArray(tree)) return tree.map((node) => toElement(react, node));
   if ("n" in tree) return Number(tree.n); // "NaN", "-0", "Infinity" and decimals all parse
+  if ("u" in tree) return undefined;
+  if ("b" in tree) return BigInt(tree.b);
   const props: Record<string, unknown> = {};
   for (const [name, value] of tree.a) {
     props[name] = value !== null && typeof value === "object" ? undefined : value;

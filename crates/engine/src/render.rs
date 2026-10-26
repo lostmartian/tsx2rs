@@ -121,6 +121,7 @@ impl Renderer<'_, '_> {
                     flight::string(&mut self.out.flight, s);
                 }
                 Op::Value => self.value(input, 0)?,
+                Op::Child => self.child(input, 0)?,
                 Op::Island => self.island(input)?,
                 Op::Loop { end, separator } => {
                     let count = input.u32()?;
@@ -232,6 +233,54 @@ impl Renderer<'_, '_> {
         self.out.html.push(b' ');
         self.out.html.extend_from_slice(self.program.chunk(name));
         self.out.html.extend_from_slice(b"=\"");
+    }
+
+    /// A node known only at runtime, as React DOM's server renders a child (`renderNodeDestructive`
+    /// in `react-dom-server`, 19.3.1) and React's Flight server serializes it.
+    fn child(&mut self, input: &mut Input<'_>, depth: usize) -> Result<(), RenderError> {
+        let offset = input.offset();
+        if depth > MAX_VALUE_DEPTH {
+            return Err(RenderError::TooDeep { offset });
+        }
+        match input.u8()? {
+            // Booleans, `null` and `undefined` render nothing and leave the text state alone.
+            tag::UNDEFINED => self.out.flight.extend_from_slice(flight::UNDEFINED),
+            tag::NULL => self.out.flight.extend_from_slice(b"null"),
+            tag::FALSE => self.out.flight.extend_from_slice(b"false"),
+            tag::TRUE => self.out.flight.extend_from_slice(b"true"),
+            tag::NUMBER => {
+                let n = input.f64()?;
+                self.separate_text();
+                html::number(&mut self.out.html, n);
+                self.last_text = true;
+                flight::number(&mut self.out.flight, n);
+            }
+            tag::STRING => {
+                let s = input.string()?;
+                self.text(s);
+                flight::string(&mut self.out.flight, s);
+            }
+            tag::BIGINT => {
+                let digits = input.bigint()?;
+                self.text(digits);
+                flight::bigint(&mut self.out.flight, digits);
+            }
+            tag::ARRAY => {
+                let count = input.u32()?;
+                self.out.flight.push(b'[');
+                for i in 0..count {
+                    if i > 0 {
+                        self.out.flight.push(b',');
+                    }
+                    self.child(input, depth + 1)?;
+                }
+                self.out.flight.push(b']');
+            }
+            // An object isn't a node here: element values come through their own op, and React
+            // rejects any other object, so the encoder never writes one.
+            tag => return Err(RenderError::BadTag { offset, tag }),
+        }
+        Ok(())
     }
 
     /// A generic value (client component props): Flight only.

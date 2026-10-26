@@ -12,6 +12,7 @@
 //! | [`Op::Loop`](crate::Op::Loop) | `u32` LE count |
 //! | [`Op::Island`](crate::Op::Island) | string (React's HTML), then a flags byte ([`island::TEXT_START`], [`island::TEXT_END`]) |
 //! | [`Op::Value`](crate::Op::Value) | a tagged value: any [`tag`], arrays as `u32` count + values, objects as `u32` count + (string key, value) pairs |
+//! | [`Op::Child`](crate::Op::Child) | a tagged node: [`tag::UNDEFINED`], [`tag::NULL`], [`tag::FALSE`], [`tag::TRUE`], [`tag::NUMBER`], [`tag::STRING`], [`tag::BIGINT`], or [`tag::ARRAY`] with `u32` count + nodes |
 
 /// Tags for optional and generic values.
 pub mod tag {
@@ -31,6 +32,8 @@ pub mod tag {
     pub const ARRAY: u8 = 6;
     /// An object (`u32` LE count + (string key, value) pairs follow).
     pub const OBJECT: u8 = 7;
+    /// A bigint (a string follows: its decimal digits, as `String(value)` writes them).
+    pub const BIGINT: u8 = 8;
 }
 
 /// Flags for [`Op::Island`](crate::Op::Island): the island's HTML begins / ends with text.
