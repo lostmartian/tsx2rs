@@ -6,6 +6,7 @@
 use std::sync::{Mutex, OnceLock};
 
 use proptest::prelude::*;
+use proptest::test_runner::{TestCaseError, TestRunner};
 use tsx2rs_differential::lower::lower;
 use tsx2rs_differential::oracle::Oracle;
 use tsx2rs_differential::tree::{Tree, tree};
@@ -24,27 +25,29 @@ fn check(tree: &Tree) -> Result<(), String> {
     let mut output = Output::new();
     let mut oracle = oracle().lock().unwrap();
     if let Err(error) = render(&lowered.program, &lowered.input, &mut output) {
-        let react = oracle
-            .react_html(tree)
-            .map_err(|e| format!("oracle I/O: {e}"))?;
-        return match (&error, react) {
+        let io = |e: std::io::Error| format!("oracle I/O: {e}");
+        let explained = match (&error, oracle.react_html(tree, false).map_err(io)?) {
             // Any error falls back, and Next.js then reports React's.
             (RenderError::InvalidValue { .. } | RenderError::UnsupportedElement { .. }, Err(_)) => {
-                Ok(())
+                true
             }
             // A compiled component where React only turns it into a string.
-            (RenderError::UnsupportedElement { .. }, Ok(_)) if tree.has_component_as_text() => {
-                Ok(())
-            }
-            (RenderError::UnsupportedElement { .. }, Ok(html))
-                if html.contains(r#"rel=\"preload\""#) =>
-            {
-                Ok(())
-            }
-            (_, react) => Err(format!(
-                "the engine returned an error React doesn't explain\n  tree:   {}\n  engine: {error:?}\n  react:  {react:?}",
-                tree.to_json()
-            )),
+            (RenderError::UnsupportedElement { .. }, Ok(_)) if tree.has_component_as_text() => true,
+            // Something React hoists: in a document, it shows up in `<head>`.
+            (RenderError::UnsupportedElement { .. }, Ok(_)) => oracle
+                .react_html(tree, true)
+                .map_err(io)?
+                .is_ok_and(|html| head_is_filled(&html)),
+            _ => false,
+        };
+        return if explained {
+            Ok(())
+        } else {
+            Err(format!(
+                "the engine returned an error React doesn't explain\n  tree:   {}\n  engine: {error:?}\n  react:  {:?}",
+                tree.to_json(),
+                oracle.react_html(tree, true).map_err(io)?
+            ))
         };
     }
     let html = String::from_utf8(output.html).map_err(|e| e.to_string())?;
@@ -60,16 +63,36 @@ fn check(tree: &Tree) -> Result<(), String> {
     }
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: std::env::var("DIFFERENTIAL_CASES").ok().and_then(|n| n.parse().ok()).unwrap_or(512),
-        ..ProptestConfig::default()
-    })]
+/// Whether React wrote anything into the document's `<head>` (it starts empty).
+fn head_is_filled(html: &str) -> bool {
+    html.find("<head>")
+        .is_some_and(|at| !html[at + "<head>".len()..].starts_with("</head>"))
+}
 
-    #[test]
-    fn engine_matches_react(tree in tree()) {
-        if let Err(message) = check(&tree) {
-            prop_assert!(false, "{}", message);
-        }
+#[test]
+fn engine_matches_react() {
+    // Shrinking a failure through these nested generators recurses deeply; on a test thread's
+    // default stack it overflows instead of reporting the failure.
+    let run = std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(|| {
+            let cases = std::env::var("DIFFERENTIAL_CASES")
+                .ok()
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(512);
+            let config = ProptestConfig {
+                cases,
+                source_file: Some(file!()),
+                ..ProptestConfig::default()
+            };
+            TestRunner::new(config)
+                .run(&tree(), |tree| check(&tree).map_err(TestCaseError::fail))
+                .map_err(|failure| failure.to_string())
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    if let Err(failure) = run {
+        panic!("{failure}");
     }
 }

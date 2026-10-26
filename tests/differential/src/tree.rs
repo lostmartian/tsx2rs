@@ -41,8 +41,20 @@ pub enum Link {
 }
 
 impl Tree {
-    /// Whether a compiled component is somewhere React only turns it into a string (a
-    /// `<textarea>`'s children, an `<option>`'s), where the engine falls back.
+    /// The first element the tree renders, looking through arrays and components.
+    #[must_use]
+    pub fn first_tag(&self) -> Option<&'static str> {
+        match self {
+            Tree::Element(e) => Some(e.tag),
+            Tree::Component(inner, _) | Tree::Hole(inner) => inner.first_tag(),
+            Tree::Array(nodes) => nodes.iter().find_map(Tree::first_tag),
+            _ => None,
+        }
+    }
+
+    /// Whether a compiled component is in children React DOM only turns into a string or
+    /// doesn't render (a `<textarea>`'s, `<option>`'s, `<title>`'s, `<style>`'s or
+    /// `<script>`'s), where the engine falls back.
     #[must_use]
     pub fn has_component_as_text(&self) -> bool {
         fn walk(tree: &Tree, as_text: bool) -> bool {
@@ -51,7 +63,8 @@ impl Tree {
                 Tree::Array(nodes) => nodes.iter().any(|n| walk(n, as_text)),
                 Tree::Hole(inner) => walk(inner, as_text),
                 Tree::Element(e) => {
-                    let as_text = as_text || matches!(e.tag, "textarea" | "option");
+                    let as_text = as_text
+                        || matches!(e.tag, "textarea" | "option" | "title" | "style" | "script");
                     e.children.iter().any(|c| walk(c, as_text))
                 }
                 _ => false,
@@ -174,7 +187,15 @@ pub const SPECIAL_TAGS: &[&str] = &[
     "tr",
     "math",
     "font-face",
+    "title",
+    "meta",
+    "link",
+    "script",
+    "style",
 ];
+
+/// The elements React hoists into `<head>` unless it writes them in place.
+pub const HOISTABLE_TAGS: &[&str] = &["title", "meta", "link", "script", "style"];
 
 /// Prop names covering every class of React DOM's `pushAttribute`: renamed, string, any,
 /// boolean, overloaded boolean, numeric and URL props, ignored props, and aliases. Names React
@@ -279,6 +300,33 @@ fn special_props(tag: &str) -> &'static [&'static str] {
         "textarea" => &["value", "defaultValue", "rows", "id"],
         "img" | "source" => &["src", "srcSet", "loading", "fetchPriority", "alt"],
         "object" => &["data", "type"],
+        "title" => &["itemProp", "id", "dangerouslySetInnerHTML"],
+        "meta" => &["itemProp", "name", "content", "charSet", "property"],
+        "link" => &[
+            "rel",
+            "href",
+            "precedence",
+            "itemProp",
+            "disabled",
+            "onLoad",
+            "onError",
+            "as",
+        ],
+        "script" => &[
+            "src",
+            "async",
+            "type",
+            "itemProp",
+            "onLoad",
+            "dangerouslySetInnerHTML",
+        ],
+        "style" => &[
+            "precedence",
+            "href",
+            "itemProp",
+            "nonce",
+            "dangerouslySetInnerHTML",
+        ],
         _ => &["dangerouslySetInnerHTML", "id"],
     }
 }
@@ -514,6 +562,12 @@ fn special_string() -> impl Strategy<Value = String> {
         "java script:x",
         "lazy",
         "low",
+        "stylesheet",
+        "icon",
+        "default",
+        "application/ld+json",
+        "a</script><SCRIPT",
+        "</Style>x<style",
         "data:x",
         "DaTa:y",
         "data",
@@ -770,7 +824,10 @@ fn generic_element(
 /// which React rejects.
 fn special_element(children: BoxedStrategy<Vec<Tree>>) -> impl Strategy<Value = Tree> {
     prop::sample::select(SPECIAL_TAGS).prop_flat_map(move |tag| {
-        let void = matches!(tag, "input" | "img" | "source" | "menuitem");
+        let void = matches!(
+            tag,
+            "input" | "img" | "source" | "menuitem" | "meta" | "link"
+        );
         let children = if void {
             prop_oneof![9 => Just(vec![]), 1 => children.clone()].boxed()
         } else {
@@ -878,6 +935,81 @@ fn select(inner: BoxedStrategy<Tree>) -> impl Strategy<Value = Tree> {
         })
 }
 
+/// A hoistable element (`<title>`, `<meta>`, `<link>`, `<script>`, `<style>`) inside an element
+/// that makes React write it in place (`<svg>`, `<noscript>`) or not (`<div>`, `<math>`,
+/// `<foreignObject>` in `<svg>`), with raw text that must be escaped.
+fn hoistable_in_scope() -> impl Strategy<Value = Tree> {
+    let raw_text = prop_oneof![
+        3 => prop::sample::select(vec!["a</script><SCRIPT", "</Style>x<style", "x", ""])
+            .prop_map(|s| Tree::Text(s.to_owned())),
+        1 => primitive(),
+        1 => prop::collection::vec(primitive(), 0..3).prop_map(Tree::Array),
+    ];
+    (
+        prop::sample::select(vec!["svg", "noscript", "div", "math", "foreignObject"]),
+        prop::sample::select(HOISTABLE_TAGS),
+        any::<prop::sample::Index>(),
+        prop::option::weighted(0.7, raw_text),
+    )
+        .prop_flat_map(|(scope, tag, at, child)| {
+            (special_element_props(tag), Just((scope, tag, at, child)))
+        })
+        .prop_map(|(props, (scope, tag, _, child))| {
+            let runtime = |tag, props, children| {
+                Tree::Element(Element {
+                    tag,
+                    key: None,
+                    props,
+                    spread: false,
+                    runtime: true,
+                    children_at: None,
+                    children,
+                })
+            };
+            let void = matches!(tag, "meta" | "link");
+            let children = if void {
+                vec![]
+            } else {
+                child.into_iter().collect()
+            };
+            let hoistable = runtime(tag, props, children);
+            match scope {
+                "foreignObject" => runtime(
+                    "svg",
+                    vec![],
+                    vec![runtime("foreignObject", vec![], vec![hoistable])],
+                ),
+                scope => runtime(scope, vec![], vec![hoistable]),
+            }
+        })
+}
+
+/// `<html>`, `<head>` and `<body>` inside the body, where React writes them as generic elements.
+fn document_elements(inner: BoxedStrategy<Tree>) -> impl Strategy<Value = Tree> {
+    (props(), prop::collection::vec(inner, 0..3)).prop_map(|(props, body)| {
+        let runtime = |tag, props, children| {
+            Tree::Element(Element {
+                tag,
+                key: None,
+                props,
+                spread: false,
+                runtime: true,
+                children_at: None,
+                children,
+            })
+        };
+        let html = runtime(
+            "html",
+            props,
+            vec![
+                runtime("head", vec![], vec![]),
+                runtime("body", vec![], body),
+            ],
+        );
+        runtime("div", vec![], vec![html])
+    })
+}
+
 /// `<pre>`, `<listing>` or `<textarea>` with one text child that may start with a newline, which
 /// React doubles.
 fn leading_newline() -> impl Strategy<Value = Tree> {
@@ -945,6 +1077,8 @@ pub fn tree() -> impl Strategy<Value = Tree> {
             1 => select(inner.clone()),
             1 => image_in_scope(),
             1 => leading_newline(),
+            2 => hoistable_in_scope(),
+            1 => document_elements(inner.clone()),
             1 => (inner.clone(), prop_oneof![Just(Link::Call), Just(Link::Hole)])
                 .prop_map(|(tree, link)| Tree::Component(Box::new(tree), link)),
             1 => prop::collection::vec(inner, 0..4).prop_map(Tree::Array),
