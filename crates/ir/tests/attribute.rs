@@ -1,6 +1,6 @@
 //! React DOM's prop rules: how each prop name is classified.
 
-use tsx2rs_ir::attribute::{ElementRules, Kind, Prop, classify, is_safe_name};
+use tsx2rs_ir::attribute::{ElementRules, Kind, Prop, classify, is_custom_element, is_safe_name};
 
 fn attribute(prop: &str) -> Option<(&str, Kind)> {
     match classify(prop, ElementRules::Generic) {
@@ -113,5 +113,62 @@ fn checks_names_like_reacts_regex() {
         "a\u{2041}",
     ] {
         assert!(!is_safe_name(unsafe_name), "{unsafe_name:?}");
+    }
+}
+
+#[test]
+fn writes_custom_element_props_as_given_with_booleans_as_empty() {
+    let custom = |prop| classify(prop, ElementRules::Custom);
+    let written = |name| Prop::Attribute {
+        name,
+        kind: Kind::OverloadedBoolean,
+    };
+    assert_eq!(custom("className"), written("class"));
+    // No renaming, no per-name kinds, and handler names are kept (React drops their functions).
+    for prop in [
+        "htmlFor",
+        "tabIndex",
+        "hidden",
+        "cols",
+        "href",
+        "defaultValue",
+        "onClick",
+        "data-x",
+        "my-attr",
+    ] {
+        assert_eq!(custom(prop), written(prop), "{prop}");
+    }
+    assert_eq!(custom("style"), Prop::Style);
+    assert_eq!(custom("children"), Prop::Content);
+    assert_eq!(custom("dangerouslySetInnerHTML"), Prop::Content);
+    assert_eq!(custom("ref"), Prop::Ref);
+    for prop in [
+        "suppressHydrationWarning",
+        "suppressContentEditableWarning",
+        "1x",
+        "a b",
+        "",
+    ] {
+        assert_eq!(custom(prop), Prop::Ignored, "{prop:?}");
+    }
+}
+
+#[test]
+fn recognizes_custom_elements_like_react() {
+    for tag in ["my-element", "x-", "a-b-c", "-x"] {
+        assert!(is_custom_element(tag), "{tag}");
+    }
+    for tag in [
+        "div",
+        "annotation-xml",
+        "color-profile",
+        "font-face",
+        "font-face-src",
+        "font-face-uri",
+        "font-face-format",
+        "font-face-name",
+        "missing-glyph",
+    ] {
+        assert!(!is_custom_element(tag), "{tag}");
     }
 }

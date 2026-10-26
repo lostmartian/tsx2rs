@@ -2,9 +2,10 @@
 //! which name, and how their values are written.
 //!
 //! This is `pushAttribute` from `react-dom-server` (19.3.1), as `pushStartGenericElement` calls it
-//! for generic elements (`div`, `span`, `p`, void elements, …) and the `a` element. Elements with
-//! rules of their own (`input`, `select`, `option`, `textarea`, `button`, `form`, `img`, `link`,
-//! `meta`, `script`, `style`, `title`, `html`, `head`, `body`, custom elements) aren't covered.
+//! for generic elements (`div`, `span`, `p`, void elements, …) and the `a` element, and the
+//! attribute loop of `pushStartInstance` for custom elements. Elements that treat some props
+//! specially (`input`, `select`, `option`, `textarea`, `button`, `form`, `object`, …) use these
+//! rules for their other props; the engine applies the special ones (ADR-0007).
 //!
 //! The compiler classifies props whose names it knows ([`crate::Op::Prop`]), and the engine
 //! classifies the names of a props object it reads at runtime ([`crate::Op::Attributes`]), both
@@ -78,17 +79,22 @@ pub enum ElementRules {
     Generic,
     /// The `a` element: like generic elements, except that `href=""` is written.
     Anchor,
+    /// Custom elements (a `-` in the tag, except the SVG and `MathML` names React excludes, see
+    /// [`is_custom_element`]): `className` is written as `class`, every other safe name as
+    /// given, with [`Kind::OverloadedBoolean`] (`true` as `""`, `false` dropped).
+    Custom,
 }
 
 impl ElementRules {
     /// Every rule set.
-    pub const ALL: [Self; 2] = [Self::Generic, Self::Anchor];
+    pub const ALL: [Self; 3] = [Self::Generic, Self::Anchor, Self::Custom];
 
     /// Its byte in the program format.
     pub(crate) const fn to_byte(self) -> u8 {
         match self {
             Self::Generic => 0,
             Self::Anchor => 1,
+            Self::Custom => 2,
         }
     }
 
@@ -120,9 +126,13 @@ pub enum Prop<'a> {
     Ignored,
 }
 
-/// Classifies a prop by its React name, as `pushAttribute` does.
+/// Classifies a prop by its React name, as `pushAttribute` does (or, for
+/// [`ElementRules::Custom`], as `pushStartInstance` does for custom elements).
 #[must_use]
 pub fn classify(prop: &str, rules: ElementRules) -> Prop<'_> {
+    if rules == ElementRules::Custom {
+        return custom(prop);
+    }
     let attribute = |name, kind| Prop::Attribute { name, kind };
     match prop {
         "children" | "dangerouslySetInnerHTML" => Prop::Content,
@@ -189,6 +199,44 @@ pub fn classify(prop: &str, rules: ElementRules) -> Prop<'_> {
         "xmlSpace" => attribute("xml:space", Kind::String),
         _ => other(prop),
     }
+}
+
+/// A custom element's prop: no renaming except `className`, no per-name kinds, and no dropping
+/// of event handler names (their values, functions, are what React drops).
+fn custom(prop: &str) -> Prop<'_> {
+    match prop {
+        "children" | "dangerouslySetInnerHTML" => Prop::Content,
+        "style" => Prop::Style,
+        "suppressContentEditableWarning" | "suppressHydrationWarning" => Prop::Ignored,
+        "ref" => Prop::Ref,
+        "className" => Prop::Attribute {
+            name: "class",
+            kind: Kind::OverloadedBoolean,
+        },
+        _ if is_safe_name(prop) => Prop::Attribute {
+            name: prop,
+            kind: Kind::OverloadedBoolean,
+        },
+        _ => Prop::Ignored,
+    }
+}
+
+/// Whether React DOM renders an element of this type as a custom element: its name has a `-`
+/// and isn't one of the SVG and `MathML` names React excludes (`isCustomElement`).
+#[must_use]
+pub fn is_custom_element(tag: &str) -> bool {
+    tag.contains('-')
+        && !matches!(
+            tag,
+            "annotation-xml"
+                | "color-profile"
+                | "font-face"
+                | "font-face-src"
+                | "font-face-uri"
+                | "font-face-format"
+                | "font-face-name"
+                | "missing-glyph"
+        )
 }
 
 /// The `default` branch of `pushAttribute`: event handlers are dropped, then the name is aliased

@@ -223,12 +223,36 @@ pub(crate) fn props() -> Case {
     case(&[], vec![Op::Value], w.finish())
 }
 
+/// 200 element values (ADR-0007) in one `{x}` hole: keyed
+/// `<li className={…}><a href={…}>{name}</a></li>`, as a component that received them as
+/// `children` would place them.
+pub(crate) fn element_values() -> Case {
+    let mut w = InputWriter::new();
+    w.tag(tag::ARRAY).count(200);
+    for i in 0..200 {
+        w.tag(tag::ELEMENT).string("li");
+        w.tag(tag::STRING).string(&i.to_string());
+        w.count(2);
+        w.string("className").tag(tag::STRING).string("menu-item");
+        w.string("children");
+        w.tag(tag::ELEMENT).string("a").tag(tag::NULL).count(2);
+        w.string("href")
+            .tag(tag::STRING)
+            .string(&format!("/search/collection-{i}"));
+        w.string("children");
+        w.tag(tag::STRING).string(&format!("Collection {i}"));
+    }
+    let chunks = ["<ul>", r#"["$","ul",null,{"children":"#, "</ul>", "}]"];
+    let ops = vec![stat(0, 1), Op::Child, stat(2, 3)];
+    case(&chunks, ops, w.finish())
+}
+
 /// Every render case, by name.
 #[allow(
     dead_code,
     reason = "the instruction counts list their cases one by one"
 )]
-pub(crate) fn all() -> [(&'static str, Case); 6] {
+pub(crate) fn all() -> [(&'static str, Case); 7] {
     [
         ("static_page", static_page()),
         ("text_list", text_list()),
@@ -236,6 +260,7 @@ pub(crate) fn all() -> [(&'static str, Case); 6] {
         ("spread_attributes", spread_attributes()),
         ("style", style()),
         ("props", props()),
+        ("element_values", element_values()),
     ]
 }
 

@@ -117,4 +117,27 @@ impl Oracle {
             Err(Ok(Mismatch(verdict)))
         }
     }
+
+    /// What React DOM's server does with `tree`, for a tree the engine returned an error for:
+    /// `Ok` with its HTML (as a JSON string literal), or `Err` with the message it threw.
+    ///
+    /// # Errors
+    ///
+    /// An I/O error talking to the oracle, or a response it doesn't understand.
+    pub fn react_html(&mut self, tree: &Tree) -> std::io::Result<Result<String, String>> {
+        let response = self
+            .html
+            .ask(&format!(r#"{{"tree":{}}}"#, tree.to_json()))?;
+        let field = |name: &str| {
+            response
+                .strip_prefix(&format!(r#"{{"{name}":"#))
+                .and_then(|rest| rest.strip_suffix('}'))
+                .map(str::to_owned)
+        };
+        match (field("reactHtml"), field("reactThrew")) {
+            (Some(html), _) => Ok(Ok(html)),
+            (None, Some(message)) => Ok(Err(message)),
+            (None, None) => Err(std::io::Error::other(response)),
+        }
+    }
 }

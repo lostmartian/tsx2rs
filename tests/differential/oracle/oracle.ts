@@ -8,10 +8,13 @@
  *   node oracle.ts html
  *     request: {"tree", "engineHtml", "engineFlight", "reactPayload"}
  *     response: {"ok": true} or {"ok": false, "html"?: difference, "flight"?: difference}
+ *     request: {"tree"}  (the engine returned an error)
+ *     response: {"reactHtml": string} or {"reactThrew": message}
  *
  * In html mode the oracle is also the judge: React DOM's HTML must equal the engine's byte for
  * byte, and React Flight's payload must decode to the same tree as the engine's Flight value
- * (decoded with the identity harness, ADR-0002).
+ * (decoded with the identity harness, ADR-0002). When React DOM throws, the response says so
+ * (`reactThrew`): the engine must then return an error too.
  */
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline";
@@ -26,7 +29,15 @@ export type Tree =
   | { u: 1 }
   | { b: string }
   | Tree[]
-  | { t: string; a: [string, AttributeValue][]; c: Tree[] };
+  | {
+      t: string;
+      /** The key, if any. */
+      k?: string;
+      a: [string, AttributeValue][];
+      c: Tree[];
+      /** Where `children` goes among the props; absent: after them, as JSX writes it. */
+      ci?: number;
+    };
 type AttributeValue =
   | string
   | boolean
@@ -34,7 +45,9 @@ type AttributeValue =
   | { u: 1 }
   | { n: string }
   | { b: string }
-  | { s: [string, AttributeValue][] };
+  | { s: [string, AttributeValue][] }
+  | { a: AttributeValue[] }
+  | { h: AttributeValue };
 
 const require = createRequire(import.meta.url);
 
@@ -51,6 +64,8 @@ function toValue(value: AttributeValue): unknown {
   if ("n" in value) return Number(value.n);
   if ("b" in value) return BigInt(value.b);
   if ("s" in value) return Object.fromEntries(value.s.map(([k, v]) => [k, toValue(v)]));
+  if ("a" in value) return value.a.map(toValue);
+  if ("h" in value) return { __html: toValue(value.h) };
   return undefined;
 }
 
@@ -61,8 +76,19 @@ function toElement(react: ReactModule, tree: Tree): unknown {
   if ("u" in tree) return undefined;
   if ("b" in tree) return BigInt(tree.b);
   const props: Record<string, unknown> = {};
-  for (const [name, value] of tree.a) props[name] = toValue(value);
-  return react.createElement(tree.t, props, ...tree.c.map((c) => toElement(react, c)));
+  if (tree.k !== undefined) props["key"] = tree.k;
+  const children = tree.c.map((c) => toElement(react, c));
+  if (tree.ci === undefined) {
+    for (const [name, value] of tree.a) props[name] = toValue(value);
+    return react.createElement(tree.t, props, ...children);
+  }
+  // `children` as a prop, at its place in the props object.
+  tree.a.forEach(([name, value], i) => {
+    if (i === tree.ci) props["children"] = children.length === 1 ? children[0] : children;
+    props[name] = toValue(value);
+  });
+  if (tree.ci === tree.a.length) props["children"] = children.length === 1 ? children[0] : children;
+  return react.createElement(tree.t, props);
 }
 
 async function flightPayload(tree: Tree): Promise<string> {
@@ -90,9 +116,9 @@ async function flightPayload(tree: Tree): Promise<string> {
 
 interface JudgeRequest {
   tree: Tree;
-  engineHtml: string;
-  engineFlight: string;
-  reactPayload: string;
+  engineHtml?: string;
+  engineFlight?: string;
+  reactPayload?: string;
 }
 
 async function judge(request: JudgeRequest): Promise<Record<string, unknown>> {
@@ -100,11 +126,20 @@ async function judge(request: JudgeRequest): Promise<Record<string, unknown>> {
   const { renderToString } = require("react-dom/server") as {
     renderToString: (element: unknown) => string;
   };
+  let reactHtml: string;
+  try {
+    reactHtml = renderToString(toElement(react, request.tree));
+  } catch (e) {
+    const reactThrew = e instanceof Error ? e.message : String(e);
+    return request.engineHtml === undefined ? { reactThrew } : { ok: false, reactThrew };
+  }
+  if (request.engineHtml === undefined || request.engineFlight === undefined) {
+    return { reactHtml };
+  }
   const identity = await import("@tsx2rs/identity");
-  const reactHtml = renderToString(toElement(react, request.tree));
   const html = identity.firstHtmlDifference(reactHtml, request.engineHtml);
   const encoder = new TextEncoder();
-  const reactTree = identity.decodeFlight(encoder.encode(request.reactPayload)).root;
+  const reactTree = identity.decodeFlight(encoder.encode(request.reactPayload ?? "")).root;
   const engineTree = identity.decodeFlight(encoder.encode(`0:${request.engineFlight}\n`)).root;
   const flight = identity.firstTreeDifference(reactTree, engineTree, []);
   return html === undefined && flight === undefined

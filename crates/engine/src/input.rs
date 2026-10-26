@@ -1,9 +1,12 @@
 //! Reads values from the input buffer in the format of [`tsx2rs_ir::input`], checking every
 //! length, tag and UTF-8 sequence.
 
-use crate::RenderError;
+use crate::{MAX_VALUE_DEPTH, RenderError};
 use tsx2rs_ir::input::tag;
 
+/// A cursor over the input. Copying it gives a second cursor at the same place, for reading a
+/// value again or ahead.
+#[derive(Clone, Copy)]
 pub(crate) struct Input<'a> {
     bytes: &'a [u8],
     at: usize,
@@ -104,5 +107,64 @@ impl<'a> Input<'a> {
             tag::BIGINT => Primitive::BigInt(self.bigint()?),
             tag => return Err(RenderError::BadTag { offset, tag }),
         })
+    }
+
+    /// Skips one tagged value of any kind, elements included, checking it as it goes.
+    pub(crate) fn skip(&mut self, depth: usize) -> Result<(), RenderError> {
+        let offset = self.at;
+        if depth > MAX_VALUE_DEPTH {
+            return Err(RenderError::TooDeep { offset });
+        }
+        match self.u8()? {
+            tag::UNDEFINED | tag::NULL | tag::FALSE | tag::TRUE => {}
+            tag::NUMBER => {
+                self.f64()?;
+            }
+            tag::STRING => {
+                self.string()?;
+            }
+            tag::BIGINT => {
+                self.bigint()?;
+            }
+            tag::ARRAY => {
+                for _ in 0..self.u32()? {
+                    self.skip(depth + 1)?;
+                }
+            }
+            tag::OBJECT => {
+                for _ in 0..self.u32()? {
+                    self.string()?;
+                    self.skip(depth + 1)?;
+                }
+            }
+            tag::ELEMENT => self.skip_element(depth)?,
+            tag => return Err(RenderError::BadTag { offset, tag }),
+        }
+        Ok(())
+    }
+
+    /// Skips an element node after its tag: type, key, props and children.
+    pub(crate) fn skip_element(&mut self, depth: usize) -> Result<(), RenderError> {
+        self.string()?;
+        let offset = self.at;
+        match self.u8()? {
+            tag::NULL => {}
+            tag::STRING => {
+                self.string()?;
+            }
+            tag => return Err(RenderError::BadTag { offset, tag }),
+        }
+        let mut children = false;
+        for _ in 0..self.u32()? {
+            if self.string()? == "children" {
+                children = true;
+            } else {
+                self.skip(depth + 1)?;
+            }
+        }
+        if children {
+            self.skip(depth + 1)?;
+        }
+        Ok(())
     }
 }

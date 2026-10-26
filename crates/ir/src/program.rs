@@ -78,7 +78,11 @@ pub enum Op {
     Value,
     /// Reads a React node whose kind is known only at runtime (a `{x}` child, ADR-0005): a
     /// string, number or bigint is a text node; `true`, `false`, `null` and `undefined` render
-    /// nothing; an array renders its nodes in order. In Flight, the node's value.
+    /// nothing; an array renders its nodes in order; an element is written by React DOM's rules
+    /// for its type (ADR-0007). In Flight, the node's value.
+    ///
+    /// The node renders in the document body's context: outside any `<select>`, `<noscript>`
+    /// or `<picture>`. So the compiler doesn't place a `Child` inside a `<select>`.
     Child,
     /// Reads a client component's HTML as rendered by React, with its text-edge flags: written
     /// to HTML as is; nothing in Flight (the reference and props are separate ops).

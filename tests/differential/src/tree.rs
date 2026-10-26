@@ -22,17 +22,19 @@ pub enum Tree {
     /// An array of nodes (React renders them in order).
     Array(Vec<Self>),
     /// A node known only at runtime: lowered to `Op::Child`, with the node as its input. Holds
-    /// only what `Op::Child` takes (no elements).
+    /// primitives and arrays (an element value is an [`Element`] with `runtime` set).
     Hole(Box<Self>),
     /// A host element.
     Element(Element),
 }
 
-/// A host element (`<div>`, `<a>`, `<br>`, …).
+/// A host element (`<div>`, `<a>`, `<br>`, `<input>`, `<my-element>`, …).
 #[derive(Clone, Debug)]
 pub struct Element {
     /// The tag.
     pub tag: &'static str,
+    /// The key, if any.
+    pub key: Option<String>,
     /// Props in order (unique names): React prop name and value. A `style` prop's value is a
     /// [`Value::Style`], `null` or `undefined`.
     pub props: Vec<(String, Value)>,
@@ -40,15 +42,33 @@ pub struct Element {
     /// their names, so they're lowered to one `Op::Attributes`. Otherwise each prop is an
     /// `Op::Prop` (or `Op::Value` for props React doesn't write).
     pub spread: bool,
-    /// Children (none for void elements).
+    /// Whether the element is an element value (ADR-0007): lowered to `Op::Child` with the
+    /// whole element, its descendants included, as input. Always set for [`SPECIAL_TAGS`].
+    pub runtime: bool,
+    /// Where `children` is among the props, as `<div {...{ children, id }}>` puts it. `None`:
+    /// after the props, as JSX writes it (and absent when there are no children). Only for
+    /// element values.
+    pub children_at: Option<usize>,
+    /// Children.
     pub children: Vec<Tree>,
 }
 
 impl Element {
-    /// Whether the tag is a void element (no children, written `<tag/>`).
+    /// Whether the tag is a void element (no content, written `<tag/>`).
     #[must_use]
     pub fn is_void(&self) -> bool {
-        VOID_TAGS.contains(&self.tag)
+        VOID_TAGS.contains(&self.tag) || matches!(self.tag, "input" | "img" | "source")
+    }
+
+    /// The `children` prop's value, as `createElement(tag, props, ...children)` builds it: absent
+    /// for none (unless `children_at` places it), the child for one, an array for several.
+    #[must_use]
+    pub fn children_value(&self) -> Option<Tree> {
+        match self.children.as_slice() {
+            [] if self.children_at.is_none() => None,
+            [only] => Some(only.clone()),
+            children => Some(Tree::Array(children.to_vec())),
+        }
     }
 }
 
@@ -69,16 +89,59 @@ pub enum Value {
     Undefined,
     /// A `style` object: CSS property names and primitive values, in order (unique names).
     Style(Vec<(String, Value)>),
+    /// An array of primitives: a `<select>`'s `value` or `defaultValue` (`multiple`).
+    Array(Vec<Value>),
+    /// `{ __html: value }` (`dangerouslySetInnerHTML`).
+    Html(Box<Value>),
 }
 
 /// Tags whose props follow React DOM's generic rules, plus `a` (the only difference: `href=""`
-/// is written). Elements with rules of their own (`input`, `select`, `img`, `script`, …) get
-/// their own tests with the engine support for them.
+/// is written) and custom elements (their own prop rules, `ElementRules::Custom`). These can be
+/// lowered to templates or be element values.
 pub const TAGS: &[&str] = &[
-    "div", "span", "p", "ul", "li", "b", "i", "section", "h1", "a", "svg", "g", "path", "td",
+    "div",
+    "span",
+    "p",
+    "ul",
+    "li",
+    "b",
+    "i",
+    "section",
+    "h1",
+    "a",
+    "svg",
+    "g",
+    "path",
+    "td",
+    "my-element",
+    "x-y",
 ];
-/// Void tags the generator uses (React's `pushSelfClosing`).
+/// Void tags with generic prop rules (React's `pushSelfClosing`). `input`, `img` and `source` are
+/// void too, in [`SPECIAL_TAGS`].
 pub const VOID_TAGS: &[&str] = &["br", "hr", "wbr"];
+/// Tags with rules of their own (ADR-0007), or that change their descendants' context. The
+/// compiler lowers these as element values, so they're always generated as element values.
+pub const SPECIAL_TAGS: &[&str] = &[
+    "input",
+    "img",
+    "source",
+    "textarea",
+    "select",
+    "option",
+    "optgroup",
+    "button",
+    "form",
+    "pre",
+    "listing",
+    "object",
+    "menuitem",
+    "noscript",
+    "picture",
+    "table",
+    "tr",
+    "math",
+    "font-face",
+];
 
 /// Prop names covering every class of React DOM's `pushAttribute`: renamed, string, any,
 /// boolean, overloaded boolean, numeric and URL props, ignored props, and aliases. Names React
@@ -144,7 +207,48 @@ const KNOWN_PROPS: &[&str] = &[
     "my-attr",
     "x:y",
     "é",
+    "name",
+    "type",
+    "checked",
+    "selected",
 ];
+
+/// Props that elements in [`SPECIAL_TAGS`] treat specially, by tag.
+fn special_props(tag: &str) -> &'static [&'static str] {
+    const FORM_ACTION: &[&str] = &[
+        "name",
+        "formAction",
+        "formEncType",
+        "formMethod",
+        "formTarget",
+        "type",
+        "id",
+        "dangerouslySetInnerHTML",
+    ];
+    match tag {
+        "input" => &[
+            "name",
+            "formAction",
+            "formEncType",
+            "formMethod",
+            "formTarget",
+            "value",
+            "defaultValue",
+            "checked",
+            "defaultChecked",
+            "type",
+            "id",
+        ],
+        "button" => FORM_ACTION,
+        "form" => &["action", "encType", "method", "target", "id"],
+        "select" => &["value", "defaultValue", "multiple", "id"],
+        "option" => &["value", "selected", "label", "dangerouslySetInnerHTML"],
+        "textarea" => &["value", "defaultValue", "rows", "id"],
+        "img" | "source" => &["src", "srcSet", "loading", "fetchPriority", "alt"],
+        "object" => &["data", "type"],
+        _ => &["dangerouslySetInnerHTML", "id"],
+    }
+}
 
 /// Names React drops as unsafe in HTML.
 const UNSAFE_PROPS: &[&str] = &["1x", "-x", "a b", "a\"b", "a=b", "x>", "😀"];
@@ -185,6 +289,13 @@ impl Tree {
             Self::Element(e) => {
                 out.push_str(r#"{"t":"#);
                 json_string(out, e.tag);
+                if let Some(key) = &e.key {
+                    out.push_str(r#","k":"#);
+                    json_string(out, key);
+                }
+                if let Some(at) = e.children_at {
+                    let _ = write!(out, r#","ci":{at}"#);
+                }
                 out.push_str(r#","a":["#);
                 for (i, (name, value)) in e.props.iter().enumerate() {
                     if i > 0 {
@@ -217,6 +328,21 @@ fn value_json(out: &mut String, value: &Value) {
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         Value::Null => out.push_str("null"),
         Value::Undefined => out.push_str(r#"{"u":1}"#),
+        Value::Array(items) => {
+            out.push_str(r#"{"a":["#);
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                value_json(out, item);
+            }
+            out.push_str("]}");
+        }
+        Value::Html(inner) => {
+            out.push_str(r#"{"h":"#);
+            value_json(out, inner);
+            out.push('}');
+        }
         Value::Style(entries) => {
             out.push_str(r#"{"s":["#);
             for (i, (name, value)) in entries.iter().enumerate() {
@@ -286,6 +412,7 @@ fn text() -> impl Strategy<Value = String> {
     prop_oneof![
         1 => Just(String::new()),
         8 => "[a-z $<>&\"'é✓\\n]{1,6}",
+        1 => "\\n[a-z]{0,3}", // a leading newline (`<pre>`, `<textarea>`)
     ]
 }
 
@@ -314,8 +441,9 @@ fn bigint() -> impl Strategy<Value = String> {
     ]
 }
 
-/// Strings that exercise the value rules: numeric strings (for `isNaN` and `1 <= value`) and
-/// URLs (`javascript:` blocking).
+/// Strings that exercise the value rules: numeric strings (for `isNaN` and `1 <= value`), URLs
+/// (`javascript:` blocking, `data:` images), `<img>`'s `loading` and `fetchPriority`, and a
+/// leading newline (`<pre>`, `<textarea>`).
 fn special_string() -> impl Strategy<Value = String> {
     prop::sample::select(vec![
         "0",
@@ -346,6 +474,12 @@ fn special_string() -> impl Strategy<Value = String> {
         "/a?b=1&c=2",
         "https://example.com",
         "java script:x",
+        "lazy",
+        "low",
+        "data:x",
+        "DaTa:y",
+        "data",
+        "\nx",
     ])
     .prop_map(str::to_owned)
 }
@@ -440,8 +574,15 @@ fn style() -> impl Strategy<Value = Value> {
 }
 
 fn props() -> impl Strategy<Value = Vec<(String, Value)>> {
+    with_style(named_props(prop_name().boxed(), false))
+}
+
+/// Props with a `style` prop inserted at a random place, sometimes.
+fn with_style(
+    props: impl Strategy<Value = Vec<(String, Value)>>,
+) -> impl Strategy<Value = Vec<(String, Value)>> {
     let with_style = (
-        named_props(),
+        props,
         prop::option::weighted(0.3, style()),
         any::<prop::sample::Index>(),
     );
@@ -454,8 +595,13 @@ fn props() -> impl Strategy<Value = Vec<(String, Value)>> {
     })
 }
 
-fn named_props() -> impl Strategy<Value = Vec<(String, Value)>> {
-    prop::collection::vec(prop_name(), 0..6).prop_flat_map(|mut names| {
+/// Props with these names; `select`: a `<select>`'s, whose `value` and `defaultValue` can be
+/// arrays.
+fn named_props(
+    name: BoxedStrategy<String>,
+    select: bool,
+) -> impl Strategy<Value = Vec<(String, Value)>> {
+    prop::collection::vec(name, 0..6).prop_flat_map(move |mut names| {
         let mut seen = std::collections::HashSet::new();
         names.retain(|n| {
             !matches!(n.as_str(), "key" | "ref" | "style" | "children") && seen.insert(n.clone())
@@ -463,11 +609,55 @@ fn named_props() -> impl Strategy<Value = Vec<(String, Value)>> {
         names
             .into_iter()
             .map(|name| {
-                let numeric = NUMERIC_PROPS.contains(&name.as_str());
-                (Just(name), prop_value(numeric))
+                let value = match name.as_str() {
+                    "dangerouslySetInnerHTML" => inner_html().boxed(),
+                    "src" | "srcSet" | "loading" | "fetchPriority" => prop_oneof![
+                        3 => image_value(),
+                        1 => prop_value(false),
+                    ]
+                    .boxed(),
+                    "value" | "defaultValue" if select => prop_oneof![
+                        6 => prop_value(false),
+                        1 => prop::collection::vec(prop_value(false), 0..3).prop_map(Value::Array),
+                    ]
+                    .boxed(),
+                    name => prop_value(NUMERIC_PROPS.contains(&name)),
+                };
+                (Just(name), value)
             })
             .collect::<Vec<_>>()
     })
+}
+
+/// Values for `<img>`'s preload rules: URLs (`data:` in any case, empty), and `loading` and
+/// `fetchPriority` values.
+fn image_value() -> impl Strategy<Value = Value> {
+    prop::sample::select(vec![
+        "/x.png", "", "data:x", "DaTa:y", "data", "datax:", "lazy", "eager", "low", "high",
+    ])
+    .prop_map(|s| Value::String(s.to_owned()))
+}
+
+/// `dangerouslySetInnerHTML`: usually `{ __html }` (markup, `\n`-prefixed, any primitive), and
+/// sometimes a value React throws on.
+fn inner_html() -> impl Strategy<Value = Value> {
+    let html = prop_oneof![
+        4 => prop::sample::select(vec!["<b>x</b>", "\nx", "", "a&b"])
+            .prop_map(|s| Value::String(s.to_owned())),
+        2 => prop_value(false),
+    ];
+    prop_oneof![
+        8 => html.prop_map(|v| Value::Html(Box::new(v))),
+        1 => Just(Value::Null),
+        1 => prop_value(false),
+    ]
+}
+
+/// The props of an element in [`SPECIAL_TAGS`]: mostly the ones its rules treat specially.
+fn special_element_props(tag: &'static str) -> impl Strategy<Value = Vec<(String, Value)>> {
+    let special = prop::sample::select(special_props(tag)).prop_map(str::to_owned);
+    let name = prop_oneof![3 => special, 1 => prop_name()].boxed();
+    with_style(named_props(name, tag == "select"))
 }
 
 /// The nodes a template can't know until runtime, as `Op::Child` reads them: primitives and
@@ -491,32 +681,232 @@ fn hole() -> impl Strategy<Value = Tree> {
         .prop_map(|node| Tree::Hole(Box::new(node)))
 }
 
-/// A random tree: elements (normal and void) with props; text, numbers, bigints, `null`,
-/// `undefined` and booleans; arrays; and runtime holes.
+/// Keys, including one Flight escapes (`$`).
+fn key() -> impl Strategy<Value = Option<String>> {
+    prop::option::weighted(0.3, "[a-z0-9$]{0,3}")
+}
+
+/// An element with these parts; `runtime` (or a special tag) makes it an element value, which
+/// may place `children` anywhere among its props.
+fn element(
+    tag: &'static str,
+    props: Vec<(String, Value)>,
+    (spread, runtime): (bool, bool),
+    key: Option<String>,
+    children_at: prop::sample::Index,
+    children: Vec<Tree>,
+) -> Tree {
+    let runtime = runtime || SPECIAL_TAGS.contains(&tag);
+    let children_at =
+        (runtime && children_at.index(4) == 0).then(|| children_at.index(props.len() + 1));
+    Tree::Element(Element {
+        tag,
+        key,
+        props,
+        spread,
+        runtime,
+        children_at,
+        children,
+    })
+}
+
+/// An element with generic rules: a template element or an element value.
+fn generic_element(
+    tags: &'static [&'static str],
+    children: impl Strategy<Value = Vec<Tree>>,
+) -> impl Strategy<Value = Tree> {
+    (
+        prop::sample::select(tags),
+        props(),
+        (any::<bool>(), prop::bool::weighted(0.3)),
+        key(),
+        any::<prop::sample::Index>(),
+        children,
+    )
+        .prop_map(|(tag, props, flags, key, at, children)| {
+            element(tag, props, flags, key, at, children)
+        })
+}
+
+/// An element with rules of its own (always an element value). Void ones rarely get children,
+/// which React rejects.
+fn special_element(children: BoxedStrategy<Vec<Tree>>) -> impl Strategy<Value = Tree> {
+    prop::sample::select(SPECIAL_TAGS).prop_flat_map(move |tag| {
+        let void = matches!(tag, "input" | "img" | "source" | "menuitem");
+        let children = if void {
+            prop_oneof![9 => Just(vec![]), 1 => children.clone()].boxed()
+        } else {
+            children.clone()
+        };
+        (
+            special_element_props(tag),
+            key(),
+            any::<prop::sample::Index>(),
+            children,
+        )
+            .prop_map(move |(props, key, at, children)| {
+                element(tag, props, (false, true), key, at, children)
+            })
+    })
+}
+
+/// A `<select>` with options: directly, in `<optgroup>`s and other elements, and behind elements
+/// that reset the select's context (`<table>`, `<svg>`, `<noscript>`).
+fn select(inner: BoxedStrategy<Tree>) -> impl Strategy<Value = Tree> {
+    // Option texts and select values from one small pool, so they often match: `"1"` matches
+    // the number 1, the bigint 1, and option text `1` from a number child.
+    let option_child = prop_oneof![
+        4 => prop_oneof![
+            Just(Tree::Text("a".to_owned())),
+            Just(Tree::Text("1".to_owned())),
+            Just(Tree::Number(1.0)),
+            Just(Tree::BigInt("1".to_owned())),
+            Just(Tree::Null),
+            Just(Tree::Bool(true)),
+        ],
+        2 => primitive(),
+        1 => inner,
+    ];
+    let pool = || {
+        prop::sample::select(vec![
+            Value::String("a".to_owned()),
+            Value::String("1".to_owned()),
+            Value::String("a1".to_owned()),
+            Value::String("11".to_owned()),
+            Value::Number(1.0),
+            Value::BigInt("1".to_owned()),
+        ])
+    };
+    let select_value = prop_oneof![
+        3 => pool(),
+        1 => prop::collection::vec(pool(), 0..3).prop_map(Value::Array),
+    ];
+    let option = (
+        special_element_props("option"),
+        prop::collection::vec(option_child, 0..3),
+    )
+        .prop_map(|(props, children)| {
+            Tree::Element(Element {
+                tag: "option",
+                key: None,
+                props,
+                spread: false,
+                runtime: true,
+                children_at: None,
+                children,
+            })
+        })
+        .boxed();
+    let wrapped = (
+        prop::sample::select(vec!["optgroup", "div", "table", "svg", "noscript"]),
+        prop::collection::vec(option.clone(), 0..3),
+    )
+        .prop_map(|(tag, children)| {
+            Tree::Element(Element {
+                tag,
+                key: None,
+                props: vec![],
+                spread: false,
+                runtime: true,
+                children_at: None,
+                children,
+            })
+        });
+    (
+        special_element_props("select"),
+        prop::option::weighted(
+            0.7,
+            (
+                prop::sample::select(vec!["value", "defaultValue"]),
+                select_value,
+            ),
+        ),
+        prop::collection::vec(prop_oneof![3 => option, 1 => wrapped], 0..4),
+    )
+        .prop_map(|(mut props, value, children)| {
+            if let Some((name, value)) = value {
+                props.retain(|(n, _)| n != "value" && n != "defaultValue");
+                props.insert(0, (name.to_owned(), value));
+            }
+            Tree::Element(Element {
+                tag: "select",
+                key: None,
+                props,
+                spread: false,
+                runtime: true,
+                children_at: None,
+                children,
+            })
+        })
+}
+
+/// `<pre>`, `<listing>` or `<textarea>` with one text child that may start with a newline, which
+/// React doubles.
+fn leading_newline() -> impl Strategy<Value = Tree> {
+    (
+        prop::sample::select(vec!["pre", "listing", "textarea", "div"]),
+        "\\n?[a-z\\n]{0,3}",
+    )
+        .prop_map(|(tag, text)| {
+            Tree::Element(Element {
+                tag,
+                key: None,
+                props: vec![],
+                spread: false,
+                runtime: true,
+                children_at: None,
+                children: vec![Tree::Text(text)],
+            })
+        })
+}
+
+/// An `<img>` with preload props, in an element that may stop React's preloads (`<picture>`,
+/// `<noscript>`) or not.
+fn image_in_scope() -> impl Strategy<Value = Tree> {
+    (
+        prop::sample::select(vec!["picture", "noscript", "div", "span"]),
+        special_element_props("img"),
+    )
+        .prop_map(|(tag, props)| {
+            let img = Tree::Element(Element {
+                tag: "img",
+                key: None,
+                props,
+                spread: false,
+                runtime: true,
+                children_at: None,
+                children: vec![],
+            });
+            Tree::Element(Element {
+                tag,
+                key: None,
+                props: vec![],
+                spread: false,
+                runtime: true,
+                children_at: None,
+                children: vec![img],
+            })
+        })
+}
+
+/// A random tree: elements (generic, void, custom and special; template elements and element
+/// values) with props; text, numbers, bigints, `null`, `undefined` and booleans; arrays; and
+/// runtime holes.
 pub fn tree() -> impl Strategy<Value = Tree> {
     let leaf = prop_oneof![
         11 => primitive(),
         3 => hole(),
-        1 => (prop::sample::select(VOID_TAGS), props(), any::<bool>()).prop_map(
-            |(tag, props, spread)| Tree::Element(Element { tag, props, spread, children: vec![] })
-        ),
+        1 => generic_element(VOID_TAGS, Just(vec![])),
+        1 => special_element(prop::collection::vec(primitive(), 0..3).boxed()),
     ];
     leaf.prop_recursive(4, 48, 5, |inner| {
+        let children = prop::collection::vec(inner.clone(), 0..5).boxed();
         prop_oneof![
-            4 => (
-                prop::sample::select(TAGS),
-                props(),
-                any::<bool>(),
-                prop::collection::vec(inner.clone(), 0..5),
-            )
-                .prop_map(|(tag, props, spread, children)| {
-                    Tree::Element(Element {
-                        tag,
-                        props,
-                        spread,
-                        children,
-                    })
-                }),
+            4 => generic_element(TAGS, children.clone()),
+            2 => special_element(children),
+            1 => select(inner.clone()),
+            1 => image_in_scope(),
+            1 => leading_newline(),
             1 => prop::collection::vec(inner, 0..4).prop_map(Tree::Array),
         ]
     })

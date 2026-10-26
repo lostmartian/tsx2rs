@@ -1,7 +1,7 @@
 //! HTML output rules, as React DOM's server renderer (Fizz) applies them.
 
 use crate::input::Primitive;
-use crate::js::{BLOCKED_URL, is_javascript_url, string_to_number};
+use crate::js::{BLOCKED_URL, is_javascript_url, is_nullish, is_truthy, string_to_number};
 use tsx2rs_ir::attribute::Kind;
 
 /// React's text separator between adjacent text nodes (`textSeparator` in
@@ -59,7 +59,7 @@ pub(crate) fn attribute(
     kind: Kind,
     value: Primitive<'_>,
 ) -> Result<(), Rejected> {
-    if matches!(value, Primitive::Undefined | Primitive::Null) {
+    if is_nullish(value) {
         return Ok(()); // the caller's `null != propValue`
     }
     let write = match kind {
@@ -109,37 +109,26 @@ pub(crate) fn attribute(
     Ok(())
 }
 
-fn attribute_start(out: &mut Vec<u8>, name: &[u8]) {
+pub(crate) fn attribute_start(out: &mut Vec<u8>, name: &[u8]) {
     out.push(b' ');
     out.extend_from_slice(name);
     out.extend_from_slice(b"=\"");
 }
 
-fn empty_attribute(out: &mut Vec<u8>, name: &[u8]) {
+pub(crate) fn empty_attribute(out: &mut Vec<u8>, name: &[u8]) {
     out.push(b' ');
     out.extend_from_slice(name);
     out.extend_from_slice(b"=\"\"");
 }
 
 /// A value as `escapeTextForBrowser` writes it: `"" + value`, escaped.
-fn value_text(out: &mut Vec<u8>, value: Primitive<'_>) {
+pub(crate) fn value_text(out: &mut Vec<u8>, value: Primitive<'_>) {
     match value {
         Primitive::String(s) => escape(out, s),
         Primitive::Number(n) => number(out, n),
         Primitive::BigInt(digits) => out.extend_from_slice(digits.as_bytes()),
         Primitive::Bool(b) => out.extend_from_slice(if b { b"true" } else { b"false" }),
         Primitive::Undefined | Primitive::Null => {}
-    }
-}
-
-/// JavaScript truthiness.
-fn is_truthy(value: Primitive<'_>) -> bool {
-    match value {
-        Primitive::Bool(b) => b,
-        Primitive::Number(n) => n != 0.0 && !n.is_nan(),
-        Primitive::String(s) => !s.is_empty(),
-        Primitive::BigInt(digits) => digits != "0",
-        Primitive::Undefined | Primitive::Null => false,
     }
 }
 
