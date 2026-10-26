@@ -29,6 +29,9 @@ oxc_syntax = "0.155.0"
 oxc_resolver = "11.24.3"
 insta = "1.49.0"
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+# Instruction-count benchmarks (Valgrind, ADR-0006). Pinned exactly: CI installs the same
+# `gungraun-runner` version, read from Cargo.lock.
+gungraun = "=0.20.0"
 
 [workspace.lints.rust]
 missing_debug_implementations = "warn"
