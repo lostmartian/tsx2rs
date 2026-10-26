@@ -55,7 +55,7 @@ pub fn render(program: &Program, input: &[u8], output: &mut Output) -> Result<()
         out: output,
         last_text: false,
     };
-    renderer.run(program.ops(), &mut input, 0)?;
+    renderer.run(program.ops(), &mut input, 0, Context::BODY)?;
     if !input.is_empty() {
         return Err(RenderError::TrailingInput {
             offset: input.offset(),
@@ -79,12 +79,14 @@ struct LoopFrame {
 }
 
 impl<'p> Renderer<'p, '_> {
-    /// Runs one template's ops. Each run has its own loop stack, so a template can call itself.
+    /// Runs one template's ops in the context of its call site (React's context flows through
+    /// components; ADR-0009). Each run has its own loop stack, so a template can call itself.
     fn run<'i>(
         &mut self,
         ops: &'p [Op],
         input: &mut Input<'i>,
         depth: usize,
+        context: Context<'i>,
     ) -> Result<(), RenderError> {
         let mut loops = Vec::new();
         let mut pc = 0;
@@ -133,7 +135,7 @@ impl<'p> Renderer<'p, '_> {
                 }
                 Op::Style => self.style(input, true)?,
                 Op::Value => self.value(input, 0)?,
-                Op::Child => self.child(input, depth, Context::BODY)?,
+                Op::Child => self.child(input, depth, context)?,
                 Op::Island => self.island(input)?,
                 Op::Loop { end, separator } => {
                     let count = input.u32()?;
@@ -154,7 +156,9 @@ impl<'p> Renderer<'p, '_> {
                     }
                 }
                 Op::Jump { to } => pc = to.0 as usize,
-                Op::Call { template } => self.call(template, input, depth, input.offset())?,
+                Op::Call { template } => {
+                    self.call(template, input, depth, input.offset(), context)?;
+                }
             }
         }
         Ok(())
@@ -284,19 +288,20 @@ impl<'p> Renderer<'p, '_> {
         Ok(())
     }
 
-    /// Runs a template where it's called, one level deeper.
-    fn call(
+    /// Runs a template where it's called, one level deeper, in the caller's context.
+    fn call<'i>(
         &mut self,
         template: TemplateId,
-        input: &mut Input<'_>,
+        input: &mut Input<'i>,
         depth: usize,
         offset: usize,
+        context: Context<'i>,
     ) -> Result<(), RenderError> {
         if depth >= MAX_VALUE_DEPTH {
             return Err(RenderError::TooDeep { offset });
         }
         let program: &'p Program = self.program;
-        self.run(program.template(template), input, depth + 1)
+        self.run(program.template(template), input, depth + 1, context)
     }
 
     /// Runs the loop body again, or leaves the loop. Validation guarantees an open loop here.
@@ -388,7 +393,7 @@ impl<'p> Renderer<'p, '_> {
                         template: id,
                     });
                 }
-                self.call(TemplateId(id), input, depth, offset)?;
+                self.call(TemplateId(id), input, depth, offset, context)?;
             }
             // React rejects any other object as a node, so the encoder never writes one.
             tag => return Err(RenderError::BadTag { offset, tag }),

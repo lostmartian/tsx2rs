@@ -608,12 +608,160 @@ fn writes_inner_html_unescaped_and_checks_it_like_react() {
 }
 
 #[test]
-fn rejects_elements_react_hoists_or_the_document_provides() {
-    for tag in [
-        "title", "meta", "link", "script", "style", "html", "head", "body",
-    ] {
-        unsupported(&el(tag, vec![], None));
+fn falls_back_for_elements_react_hoists() {
+    let link = |props| el("link", props, None);
+    let hoisted = [
+        el("title", vec![], Some(V::S("t"))),
+        el("meta", vec![("name", V::S("x"))], None),
+        link(vec![("rel", V::S("icon")), ("href", V::S("/i"))]),
+        link(vec![
+            ("rel", V::S("stylesheet")),
+            ("href", V::S("/s.css")),
+            ("precedence", V::S("default")),
+        ]),
+        el(
+            "script",
+            vec![("src", V::S("/a.js")), ("async", V::B(true))],
+            None,
+        ),
+        el(
+            "style",
+            vec![("href", V::S("h")), ("precedence", V::S("p"))],
+            Some(V::S("a{}")),
+        ),
+        // `<foreignObject>` ends SVG mode.
+        el(
+            "svg",
+            vec![],
+            Some(el("foreignObject", vec![], Some(el("title", vec![], None)))),
+        ),
+    ];
+    for node in &hoisted {
+        unsupported(node);
     }
+}
+
+#[test]
+fn writes_scripts_in_place_with_reacts_escaping() {
+    let json_ld = el(
+        "script",
+        vec![
+            ("type", V::S("application/ld+json")),
+            (
+                "dangerouslySetInnerHTML",
+                V::Obj(vec![("__html", V::S(r#"{"a":"</script>"}"#))]),
+            ),
+        ],
+        None,
+    );
+    assert_eq!(
+        html(&json_ld),
+        r#"<script type="application/ld+json">{"a":"</script>"}</script>"#
+    );
+    assert_eq!(
+        html(&el(
+            "script",
+            vec![],
+            Some(V::S("a</script><SCRIPT x</Script"))
+        )),
+        r"<script>a</\u0073cript><\u0053CRIPT x</\u0053cript</script>"
+    );
+    // Only a string child is written; Flight still has every child.
+    let number = el("script", vec![], Some(V::N(1.0)));
+    assert_eq!(
+        render_node(&number).unwrap(),
+        (
+            "<script></script>".into(),
+            r#"["$","script",null,{"children":1}]"#.into()
+        )
+    );
+    // Not hoisted without both `src` and `async`.
+    assert_eq!(
+        html(&el("script", vec![("src", V::S("/a.js"))], None)),
+        r#"<script src="/a.js"></script>"#
+    );
+}
+
+#[test]
+fn writes_styles_in_place_with_reacts_escaping() {
+    assert_eq!(
+        html(&el("style", vec![], Some(V::S("a</style><STYLE")))),
+        r"<style>a</\73 tyle><\53 TYLE</style>"
+    );
+    assert_eq!(
+        html(&el("style", vec![], Some(V::Arr(vec![V::S("x")])))),
+        "<style>x</style>"
+    );
+}
+
+#[test]
+fn writes_titles_meta_and_links_in_place_where_react_does() {
+    let svg = |node| el("svg", vec![], Some(node));
+    assert_eq!(
+        html(&svg(el("title", vec![], Some(V::S("a<b"))))),
+        "<svg><title>a&lt;b</title></svg>"
+    );
+    assert_eq!(
+        html(&svg(el(
+            "title",
+            vec![],
+            Some(V::Arr(vec![V::S("a"), V::S("b")]))
+        ))),
+        "<svg><title></title></svg>"
+    );
+    assert_eq!(
+        html(&svg(el("title", vec![], Some(V::B(true))))),
+        "<svg><title>true</title></svg>"
+    );
+    assert_eq!(
+        html(&el(
+            "meta",
+            vec![("itemProp", V::S("x")), ("content", V::S("c"))],
+            None
+        )),
+        r#"<meta itemProp="x" content="c"/>"#
+    );
+    assert_eq!(
+        html(&el(
+            "noscript",
+            vec![],
+            Some(el(
+                "link",
+                vec![("rel", V::S("icon")), ("href", V::S("/i"))],
+                None
+            ))
+        )),
+        r#"<noscript><link rel="icon" href="/i"/></noscript>"#
+    );
+    assert_eq!(
+        html(&el("link", vec![("rel", V::S("icon"))], None)),
+        r#"<link rel="icon"/>"#
+    );
+    assert_eq!(
+        html(&el(
+            "link",
+            vec![("rel", V::S("stylesheet")), ("href", V::S("/s.css"))],
+            None
+        )),
+        r#"<link rel="stylesheet" href="/s.css"/>"#
+    );
+    invalid(&el("link", vec![("rel", V::S("icon"))], Some(V::S("x"))));
+}
+
+#[test]
+fn writes_html_head_and_body_as_generic_elements_inside_the_body() {
+    let node = el(
+        "html",
+        vec![("lang", V::S("en"))],
+        Some(V::Arr(vec![
+            el("head", vec![], None),
+            el("body", vec![], Some(V::S("x"))),
+        ])),
+    );
+    assert_eq!(
+        html(&node),
+        r#"<html lang="en"><head></head><body>x</body></html>"#
+    );
 }
 
 #[test]

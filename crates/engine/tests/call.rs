@@ -175,6 +175,24 @@ fn rejects_recursion_deeper_than_the_limit() {
 }
 
 #[test]
+fn falls_back_for_components_in_children_react_dom_does_not_render() {
+    // `<script>{<Badge/>}</script>`: React DOM writes only a string child.
+    let p = program(
+        &["<b>", r#"["$","b",null,{}]"#],
+        vec![vec![Op::Child], vec![stat(0, 1, false, false)]],
+    );
+    let data = input(|w| {
+        w.tag(tag::ELEMENT).string("script").tag(tag::NULL).count(1);
+        w.string("children");
+        w.tag(tag::TEMPLATE).count(1);
+    });
+    assert!(matches!(
+        run(&p, &data),
+        Err(RenderError::UnsupportedElement { .. })
+    ));
+}
+
+#[test]
 fn falls_back_where_react_would_turn_a_component_into_text() {
     // A textarea's value from its children: `"" + <Badge/>`.
     let p = program(

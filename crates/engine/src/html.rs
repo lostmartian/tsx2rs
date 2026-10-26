@@ -43,6 +43,52 @@ pub(crate) fn number(out: &mut Vec<u8>, n: f64) {
     }
 }
 
+/// Raw-text elements whose content React writes unescaped, except for the sequence that would
+/// close them.
+#[derive(Clone, Copy)]
+pub(crate) enum RawText {
+    /// `<script>`: `<script` and `</script` (any case) get their `s` as `\u0073` / `\u0053`
+    /// (`scriptReplacer`).
+    Script,
+    /// `<style>`: `<style` and `</style` (any case) get their `s` as `\73 ` / `\53 `
+    /// (`styleReplacer`).
+    Style,
+}
+
+/// Writes `text` as the content of a raw-text element, as React DOM does:
+/// `text.replace(/(<\/|<)(s)(cript)/gi, …)` for scripts, `/(<\/|<)(s)(tyle)/gi` for styles.
+pub(crate) fn raw_text(out: &mut Vec<u8>, text: &str, kind: RawText) {
+    let (rest, lower, upper): (&[u8], &[u8], &[u8]) = match kind {
+        RawText::Script => (b"cript", b"\\u0073", b"\\u0053"),
+        RawText::Style => (b"tyle", b"\\73 ", b"\\53 "),
+    };
+    let bytes = text.as_bytes();
+    let mut start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let s_at = if bytes.get(i + 1) == Some(&b'/') {
+            i + 2
+        } else {
+            i + 1
+        };
+        let word = bytes.get(s_at + 1..s_at + 1 + rest.len());
+        match (bytes.get(s_at), word) {
+            (Some(&s @ (b's' | b'S')), Some(word)) if word.eq_ignore_ascii_case(rest) => {
+                out.extend_from_slice(&bytes[start..s_at]);
+                out.extend_from_slice(if s == b's' { lower } else { upper });
+                start = s_at + 1;
+                i = start;
+            }
+            _ => i += 1,
+        }
+    }
+    out.extend_from_slice(&bytes[start..]);
+}
+
 /// React would throw on this value (see [`attribute`]).
 #[derive(Debug)]
 pub(crate) struct Rejected;

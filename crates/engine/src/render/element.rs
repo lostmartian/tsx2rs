@@ -23,34 +23,57 @@ pub(super) struct Context<'i> {
     /// `<option>`s as selected. Elements that start a new context (`<svg>`, tables,
     /// `<noscript>`, …) reset it.
     select: Option<Selected<'i>>,
-    /// A `<noscript>` or `<picture>` encloses the element, so React doesn't preload images.
-    no_preload: bool,
+    /// SVG insertion mode: inside `<svg>`, until a `<foreignObject>` or an element that starts
+    /// an HTML context. React writes `<title>`, `<meta>`, `<link>`, `<script>` and `<style>` in
+    /// place here.
+    svg: bool,
+    /// A `<noscript>` encloses the element: React writes those five in place, and doesn't
+    /// preload images.
+    noscript: bool,
+    /// A `<picture>` encloses the element: React doesn't preload images.
+    picture: bool,
 }
 
 impl<'i> Context<'i> {
     /// The document body's context: what a `Child` op's node starts in.
     pub(super) const BODY: Self = Self {
         select: None,
-        no_preload: false,
+        svg: false,
+        noscript: false,
+        picture: false,
     };
 
     /// The context of an element's children (`getChildFormatContext`).
-    fn of_children(self, kind: Kind, state: &Special<'i>) -> Self {
-        match kind {
-            Kind::Select => Self {
+    fn of_children(self, element: &str, state: &Special<'i>) -> Self {
+        let html = Self {
+            select: None,
+            svg: false,
+            ..self
+        };
+        match element {
+            "select" => Self {
                 select: state.value.select().or(state.default_value.select()),
-                ..self
+                ..html
             },
-            Kind::ResetsSelect => Self {
-                select: None,
-                ..self
+            "svg" => Self { svg: true, ..html },
+            "noscript" => Self {
+                noscript: true,
+                ..html
             },
-            Kind::HidesImages => Self {
-                select: None,
-                no_preload: true,
+            "picture" => Self {
+                picture: true,
+                ..html
             },
+            "math" | "foreignObject" | "table" | "thead" | "tbody" | "tfoot" | "colgroup"
+            | "tr" => html,
             _ => self,
         }
+    }
+
+    /// Where React writes `<title>`, `<meta>`, `<link>`, `<script>` and `<style>` in place
+    /// whatever their props.
+    const fn keeps_hoistables(self) -> bool {
+        self.svg || self.noscript
     }
 }
 
@@ -65,14 +88,9 @@ enum Selected<'i> {
 /// Which of React DOM's rules an element type gets.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
-    /// `pushStartGenericElement`, with these prop rules (generic, `a`, custom elements).
+    /// `pushStartGenericElement`, with these prop rules (generic, `a`, custom elements, and
+    /// `html`, `head` and `body` inside the document's body).
     Generic(ElementRules),
-    /// Generic, and starts a context without a `<select>` value (`svg`, `math`, `foreignObject`,
-    /// tables).
-    ResetsSelect,
-    /// Generic, and starts a context without a `<select>` value in which React doesn't preload
-    /// images (`noscript`, `picture`).
-    HidesImages,
     /// `pushSelfClosing`: `<tag …/>`, without content.
     Void,
     Img,
@@ -86,16 +104,21 @@ enum Kind {
     Pre,
     Object,
     MenuItem,
+    /// The elements React hoists into `<head>` unless it writes them in place (ADR-0007): their
+    /// in-place forms are `pushTitleImpl`, `pushSelfClosing`, `pushLinkImpl`, `pushScriptImpl`
+    /// and the `style` case.
+    Title,
+    Meta,
+    Link,
+    Script,
+    StyleElement,
 }
 
 impl Kind {
-    /// The rules for a type, or `None` for an element this engine doesn't render yet.
-    fn of(element: &str) -> Option<Self> {
-        Some(match element {
+    /// The rules for a type.
+    fn of(element: &str) -> Self {
+        match element {
             "a" => Self::Generic(ElementRules::Anchor),
-            "svg" | "math" | "foreignObject" | "table" | "thead" | "tbody" | "tfoot"
-            | "colgroup" | "tr" => Self::ResetsSelect,
-            "noscript" | "picture" => Self::HidesImages,
             "area" | "base" | "br" | "col" | "embed" | "hr" | "keygen" | "param" | "source"
             | "track" | "wbr" => Self::Void,
             "img" => Self::Img,
@@ -108,13 +131,16 @@ impl Kind {
             "pre" | "listing" => Self::Pre,
             "object" => Self::Object,
             "menuitem" => Self::MenuItem,
-            // Hoistables and the document's own elements (ADR-0007): later pull requests.
-            "title" | "meta" | "link" | "script" | "style" | "html" | "head" | "body" => {
-                return None;
-            }
+            "title" => Self::Title,
+            "meta" => Self::Meta,
+            "link" => Self::Link,
+            "script" => Self::Script,
+            "style" => Self::StyleElement,
             _ if attribute::is_custom_element(element) => Self::Generic(ElementRules::Custom),
+            // `html`, `head` and `body` too: inside the body, React writes them as generic
+            // elements (the document's own come from Next.js's wrapper).
             _ => Self::Generic(ElementRules::Generic),
-        })
+        }
     }
 
     const fn rules(self) -> ElementRules {
@@ -126,7 +152,19 @@ impl Kind {
 
     /// Written `<tag …/>`, without an end tag or content.
     const fn self_closing(self) -> bool {
-        matches!(self, Self::Void | Self::Img | Self::Input)
+        matches!(
+            self,
+            Self::Void | Self::Img | Self::Input | Self::Meta | Self::Link
+        )
+    }
+
+    /// Writes its content from its `children` value itself, so React DOM doesn't render the
+    /// children as nodes (they still go to Flight).
+    const fn content_from_children(self) -> bool {
+        matches!(
+            self,
+            Self::Textarea | Self::Title | Self::Script | Self::StyleElement
+        )
     }
 
     /// The props written after all the others, in this order (`pushFormActionAttribute` and the
@@ -188,11 +226,27 @@ struct Special<'i> {
     default_checked: Kept<'i>,
     /// `selected` (`option`).
     selected: Kept<'i>,
+    /// The props that decide whether React hoists a `<title>`, `<meta>`, `<link>`, `<script>`
+    /// or `<style>`, by [`HOIST_PROPS`] position.
+    hoist: [Kept<'i>; 9],
     /// `src`, `srcSet`, `loading` and `fetchPriority` (`img`), for its preload.
     image: [Kept<'i>; 4],
     /// `dangerouslySetInnerHTML`.
     inner_html: InnerHtml<'i>,
 }
+
+/// The props React's hoisting decisions read (`pushStartInstance`), in [`Special::hoist`]'s order.
+const HOIST_PROPS: [&str; 9] = [
+    "itemProp",
+    "rel",
+    "href",
+    "precedence",
+    "disabled",
+    "onLoad",
+    "onError",
+    "src",
+    "async",
+];
 
 /// An element's `dangerouslySetInnerHTML` prop.
 #[derive(Clone, Copy, Default)]
@@ -226,7 +280,7 @@ impl<'i> Renderer<'_, '_> {
         if !is_valid_tag(element) {
             return Err(RenderError::InvalidValue { offset }); // React: "Invalid tag"
         }
-        let kind = Kind::of(element).ok_or(RenderError::UnsupportedElement { offset })?;
+        let kind = Kind::of(element);
         self.out.flight.extend_from_slice(b"[\"$\",\"");
         self.out.flight.extend_from_slice(element.as_bytes()); // a valid tag needs no escaping
         self.out.flight.extend_from_slice(b"\",");
@@ -287,11 +341,11 @@ impl<'i> Renderer<'_, '_> {
         self.last_text = false;
 
         if let Some((mut rest, after)) = children {
-            // The children. A textarea's are its value, written above: React doesn't render them.
-            if kind == Kind::Textarea {
+            // The children, unless the element wrote its content from them above.
+            if kind.content_from_children() {
                 self.node_flight(input, depth + 1)?;
             } else {
-                self.child(input, depth + 1, context.of_children(kind, &state))?;
+                self.child(input, depth + 1, context.of_children(element, &state))?;
             }
             // The props after `children`, in Flight only.
             for _ in 0..after {
@@ -378,6 +432,10 @@ impl<'i> Renderer<'_, '_> {
                 }
                 self.out.flight.extend_from_slice(b"}]");
             }
+            // A compiled component in children React DOM doesn't render (a `<script>`'s, a
+            // `<title>`'s): only running its template finds its Flight, and that would apply
+            // React DOM's checks React never makes there. Falls back.
+            tag::TEMPLATE => return Err(RenderError::UnsupportedElement { offset }),
             tag::OBJECT => {
                 return Err(RenderError::BadTag {
                     offset,
@@ -446,6 +504,14 @@ impl<'i> Renderer<'_, '_> {
             _ => {
                 match (kind, name) {
                     (Kind::Option, "value") => state.value = kept,
+                    (
+                        Kind::Title | Kind::Meta | Kind::Link | Kind::Script | Kind::StyleElement,
+                        _,
+                    ) => {
+                        if let Some(at) = HOIST_PROPS.iter().position(|&p| p == name) {
+                            state.hoist[at] = kept;
+                        }
+                    }
                     (Kind::Img, "src") => state.image[0] = kept,
                     (Kind::Img, "srcSet") => state.image[1] = kept,
                     (Kind::Img, "loading") => state.image[2] = kept,
@@ -532,7 +598,13 @@ impl<'i> Renderer<'_, '_> {
                     html::empty_attribute(&mut self.out.html, b"selected");
                 }
             }
-            Kind::Img if !context.no_preload && preloads(&state.image) => {
+            Kind::Img if !context.noscript && !context.picture && preloads(&state.image) => {
+                return Err(RenderError::UnsupportedElement { offset });
+            }
+            // Hoisted into `<head>`, or a resource: the hoistables pull request.
+            Kind::Title | Kind::Meta | Kind::Link | Kind::Script | Kind::StyleElement
+                if hoisted(kind, &state.hoist, context) =>
+            {
                 return Err(RenderError::UnsupportedElement { offset });
             }
             _ => {}
@@ -573,6 +645,32 @@ impl<'i> Renderer<'_, '_> {
             js::to_string(&mut self.out.html, inner);
         }
         match kind {
+            Kind::Title | Kind::StyleElement if has_content => {
+                // One child, converted to a string: an array of one is its item, a longer one
+                // nothing.
+                let mut text = Vec::new();
+                if single_child_text(&mut children, depth + 1, &mut text)? {
+                    let text = String::from_utf8_lossy(&text);
+                    if kind == Kind::Title {
+                        html::escape(&mut self.out.html, &text);
+                    } else {
+                        html::raw_text(&mut self.out.html, &text, html::RawText::Style);
+                    }
+                }
+            }
+            Kind::Script
+                if has_content && {
+                    let mut peek = children;
+                    peek.u8()? == tag::STRING
+                } =>
+            {
+                children.u8()?;
+                html::raw_text(
+                    &mut self.out.html,
+                    children.string()?,
+                    html::RawText::Script,
+                );
+            }
             Kind::Textarea => {
                 let value = state.value.primitive().or(state.default_value.primitive());
                 if has_content {
@@ -732,6 +830,76 @@ impl<'i> Renderer<'_, '_> {
         html::escape(&mut self.out.html, url);
         self.out.html.push(b'"');
     }
+}
+
+/// Whether React hoists this `<title>`, `<meta>`, `<link>`, `<script>` or `<style>` instead of
+/// writing it in place (`pushStartInstance`): never inside `<svg>` or `<noscript>`, or with an
+/// `itemProp`; otherwise by its props.
+fn hoisted(kind: Kind, hoist: &[Kept<'_>; 9], context: Context<'_>) -> bool {
+    fn string(value: Option<Primitive<'_>>) -> Option<&str> {
+        match value {
+            Some(Primitive::String(s)) => Some(s),
+            _ => None,
+        }
+    }
+    let [
+        item_prop,
+        rel,
+        href,
+        precedence,
+        disabled,
+        on_load,
+        on_error,
+        src,
+        async_,
+    ] = hoist.map(Kept::primitive);
+    if context.keeps_hoistables() || item_prop.is_some() {
+        return false;
+    }
+    let truthy = |value: Option<Primitive<'_>>| value.is_some_and(js::is_truthy);
+    let handlers = truthy(on_load) || truthy(on_error);
+    match kind {
+        Kind::Title | Kind::Meta => true,
+        Kind::Link => match (string(rel), string(href)) {
+            (Some(rel), Some(href)) if !href.is_empty() => {
+                if rel == "stylesheet" {
+                    string(precedence).is_some() && disabled.is_none() && !handlers
+                } else {
+                    !handlers
+                }
+            }
+            _ => false,
+        },
+        Kind::Script => string(src).is_some_and(|s| !s.is_empty()) && truthy(async_) && !handlers,
+        Kind::StyleElement => {
+            string(precedence).is_some() && string(href).is_some_and(|s| !s.is_empty())
+        }
+        _ => false,
+    }
+}
+
+/// The text a `<title>` or `<style>` writes from its children: `""` + the child, where an
+/// array of one counts as its item and a longer one as nothing. `false` if there is none.
+fn single_child_text(
+    input: &mut Input<'_>,
+    depth: usize,
+    out: &mut Vec<u8>,
+) -> Result<bool, RenderError> {
+    let mut peek = *input;
+    let child = match peek.u8()? {
+        tag::ARRAY => match peek.u32()? {
+            1 => peek,
+            _ => return Ok(false),
+        },
+        _ => *input,
+    };
+    let mut nullish = child;
+    if matches!(nullish.u8()?, tag::UNDEFINED | tag::NULL) {
+        return Ok(false);
+    }
+    let mut child = child;
+    node_string(&mut child, depth, out)?;
+    Ok(true)
 }
 
 /// React's `VALID_TAG_REGEX`: `/^[a-zA-Z][a-zA-Z:_\.\-\d]*$/`.

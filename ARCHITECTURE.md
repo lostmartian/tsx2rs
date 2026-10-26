@@ -52,7 +52,7 @@ Each phase is a pure function of its input. Its **diagnostics** have a stable co
 Runs template programs.
 - **One pass, two outputs:** it walks the ops once, reading each input value once, and writes HTML by React DOM's server rules and Flight by React's Flight rules at the same time.
 - **Escaping lives here and only here:** text and attributes, Flight strings, and Flight for inline `<script>` tags (`script_string`).
-- **Element values** (`render/element.rs`): host elements that reach a hole at runtime, written by React DOM's rules for their type (`input`, `select`/`option`, `textarea`, custom elements, …), with the context their descendants need (the enclosing `<select>`'s value).
+- **Element values** (`render/element.rs`): host elements that reach a hole at runtime, written by React DOM's rules for their type (`input`, `select`/`option`, `textarea`, custom elements, in-place `<script>`/`<style>`/`<title>`/`<meta>`/`<link>`, …), with the context their descendants need (the enclosing `<select>`'s value, SVG mode, `<noscript>` and `<picture>` scopes).
 - **Input is untrusted:** it is checked as it is read (lengths, tags, UTF-8, nesting depth, leftover bytes), and failures are typed errors, never panics.
 
 ### `crates/napi` *(planned)*
