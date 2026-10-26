@@ -1,6 +1,6 @@
 # ADR-0005: Rendering server components end to end: compiled templates, JavaScript values, React for the rest
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-25
 
 ## Context
