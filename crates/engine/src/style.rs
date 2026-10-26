@@ -50,34 +50,51 @@ fn text_value(out: &mut Vec<u8>, value: Primitive<'_>) {
 
 /// `name.replace(/([A-Z])/g, "-$1").toLowerCase().replace(/^ms-/, "-ms-")`, escaped.
 fn property_name(out: &mut Vec<u8>, name: &str) {
-    let hyphenated: String;
-    let lower: String;
-    let name = if name.is_ascii() {
-        hyphenated = name
-            .chars()
-            .flat_map(|c| {
-                let dash = c.is_ascii_uppercase().then_some('-');
-                dash.into_iter()
-                    .chain(std::iter::once(c.to_ascii_lowercase()))
-            })
-            .collect();
-        hyphenated.as_str()
-    } else {
-        // `toLowerCase` on the whole string: final sigma depends on the letters around it.
-        hyphenated = name
-            .chars()
-            .flat_map(|c| {
-                let dash = c.is_ascii_uppercase().then_some('-');
-                dash.into_iter().chain(std::iter::once(c))
-            })
-            .collect();
-        lower = hyphenated.to_lowercase();
-        lower.as_str()
-    };
-    if name.starts_with("ms-") {
+    if name.is_ascii() {
+        // Byte by byte, without allocating: the common case.
+        let bytes = name.as_bytes();
+        // The result starts with `ms-` when the name starts with `ms` followed by `-` or a
+        // capital (which becomes `-`).
+        if let [b'm', b's', third, ..] = bytes
+            && (*third == b'-' || third.is_ascii_uppercase())
+        {
+            out.push(b'-');
+        }
+        for &b in bytes {
+            if b.is_ascii_uppercase() {
+                out.push(b'-');
+                out.push(b.to_ascii_lowercase());
+            } else {
+                escape_byte(out, b);
+            }
+        }
+        return;
+    }
+    // `toLowerCase` on the whole string: final sigma depends on the letters around it.
+    let hyphenated: String = name
+        .chars()
+        .flat_map(|c| {
+            let dash = c.is_ascii_uppercase().then_some('-');
+            dash.into_iter().chain(std::iter::once(c))
+        })
+        .collect();
+    let lower = hyphenated.to_lowercase();
+    if lower.starts_with("ms-") {
         out.push(b'-');
     }
-    escape(out, name);
+    escape(out, &lower);
+}
+
+/// One ASCII byte, escaped as `escapeTextForBrowser` escapes it.
+fn escape_byte(out: &mut Vec<u8>, b: u8) {
+    match b {
+        b'"' => out.extend_from_slice(b"&quot;"),
+        b'&' => out.extend_from_slice(b"&amp;"),
+        b'\'' => out.extend_from_slice(b"&#x27;"),
+        b'<' => out.extend_from_slice(b"&lt;"),
+        b'>' => out.extend_from_slice(b"&gt;"),
+        _ => out.push(b),
+    }
 }
 
 /// React's `unitlessNumbers`: properties whose numbers get no `px`.
@@ -185,6 +202,9 @@ mod tests {
             ("msTransform", "-ms-transform"),
             ("MsTransform", "-ms-transform"),
             ("ms", "ms"),
+            ("ms-x", "-ms-x"),
+            ("msx", "msx"),
+            ("mS", "m-s"),
             ("XMLHttp", "-x-m-l-http"),
             ("a\"b<", "a&quot;b&lt;"),
             ("ÄpfelGröße", "äpfel-größe"),
