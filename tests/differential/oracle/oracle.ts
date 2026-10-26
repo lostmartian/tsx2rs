@@ -29,6 +29,8 @@ export type Tree =
   | { u: 1 }
   | { b: string }
   | Tree[]
+  /** A function component that returns this tree (a compiled component, ADR-0008). */
+  | { f: Tree }
   | {
       t: string;
       /** The key, if any. */
@@ -53,7 +55,7 @@ const require = createRequire(import.meta.url);
 
 interface ReactModule {
   createElement(
-    type: string,
+    type: string | (() => unknown),
     props: Record<string, unknown> | null,
     ...children: unknown[]
   ): unknown;
@@ -75,6 +77,10 @@ function toElement(react: ReactModule, tree: Tree): unknown {
   if ("n" in tree) return Number(tree.n); // "NaN", "-0", "Infinity" and decimals all parse
   if ("u" in tree) return undefined;
   if ("b" in tree) return BigInt(tree.b);
+  if ("f" in tree) {
+    const output = toElement(react, tree.f);
+    return react.createElement(() => output, null);
+  }
   const props: Record<string, unknown> = {};
   if (tree.k !== undefined) props["key"] = tree.k;
   const children = tree.c.map((c) => toElement(react, c));

@@ -26,6 +26,39 @@ pub enum Tree {
     Hole(Box<Self>),
     /// A host element.
     Element(Element),
+    /// A compiled component whose output is this subtree, run as its own template (ADR-0008).
+    /// React gets a function component that returns the subtree.
+    Component(Box<Self>, Link),
+}
+
+/// How a compiled component's template is reached.
+#[derive(Clone, Copy, Debug)]
+pub enum Link {
+    /// `Op::Call`, as for a component the compiler didn't link into its caller.
+    Call,
+    /// A template node in an `Op::Child` hole, as for a component known only at runtime.
+    Hole,
+}
+
+impl Tree {
+    /// Whether a compiled component is somewhere React only turns it into a string (a
+    /// `<textarea>`'s children, an `<option>`'s), where the engine falls back.
+    #[must_use]
+    pub fn has_component_as_text(&self) -> bool {
+        fn walk(tree: &Tree, as_text: bool) -> bool {
+            match tree {
+                Tree::Component(inner, _) => as_text || walk(inner, as_text),
+                Tree::Array(nodes) => nodes.iter().any(|n| walk(n, as_text)),
+                Tree::Hole(inner) => walk(inner, as_text),
+                Tree::Element(e) => {
+                    let as_text = as_text || matches!(e.tag, "textarea" | "option");
+                    e.children.iter().any(|c| walk(c, as_text))
+                }
+                _ => false,
+            }
+        }
+        walk(self, false)
+    }
 }
 
 /// A host element (`<div>`, `<a>`, `<br>`, `<input>`, `<my-element>`, …).
@@ -286,6 +319,11 @@ impl Tree {
                 out.push(']');
             }
             Self::Hole(node) => node.write_json(out), // React sees the value itself
+            Self::Component(node, _) => {
+                out.push_str(r#"{"f":"#);
+                node.write_json(out);
+                out.push('}');
+            }
             Self::Element(e) => {
                 out.push_str(r#"{"t":"#);
                 json_string(out, e.tag);
@@ -907,6 +945,8 @@ pub fn tree() -> impl Strategy<Value = Tree> {
             1 => select(inner.clone()),
             1 => image_in_scope(),
             1 => leading_newline(),
+            1 => (inner.clone(), prop_oneof![Just(Link::Call), Just(Link::Hole)])
+                .prop_map(|(tree, link)| Tree::Component(Box::new(tree), link)),
             1 => prop::collection::vec(inner, 0..4).prop_map(Tree::Array),
         ]
     })

@@ -32,6 +32,10 @@ fn check(tree: &Tree) -> Result<(), String> {
             (RenderError::InvalidValue { .. } | RenderError::UnsupportedElement { .. }, Err(_)) => {
                 Ok(())
             }
+            // A compiled component where React only turns it into a string.
+            (RenderError::UnsupportedElement { .. }, Ok(_)) if tree.has_component_as_text() => {
+                Ok(())
+            }
             (RenderError::UnsupportedElement { .. }, Ok(html))
                 if html.contains(r#"rel=\"preload\""#) =>
             {
