@@ -59,7 +59,8 @@ pub enum Op {
     /// by commas.
     ///
     /// The object holds every prop of the element except its content (`children`,
-    /// `dangerouslySetInnerHTML`), which the template writes after it.
+    /// `dangerouslySetInnerHTML`), which the template writes after it. A `style` prop's value
+    /// is read as [`Op::Style`] reads it.
     Attributes {
         /// Whose prop rules apply.
         rules: ElementRules,
@@ -67,6 +68,10 @@ pub enum Op {
         /// Flight.
         comma_after: bool,
     },
+    /// Reads a `style` prop's value (an object of CSS properties, or `null` / `undefined`): in
+    /// HTML the attribute ` style="…"` by React DOM's rules (`pushStyleAttribute`), or nothing;
+    /// in Flight the object.
+    Style,
     /// Reads a string: raw HTML (`dangerouslySetInnerHTML`, not escaped); in Flight a JSON string.
     RawHtml,
     /// Reads any value (client component props): nothing in HTML; in Flight its JSON encoding.
@@ -223,6 +228,7 @@ fn validate(chunks: &[Box<[u8]>], ops: &[Op]) -> Result<(), FormatError> {
             Op::Text
             | Op::Number
             | Op::Attributes { .. }
+            | Op::Style
             | Op::RawHtml
             | Op::Value
             | Op::Child

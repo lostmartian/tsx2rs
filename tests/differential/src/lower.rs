@@ -175,7 +175,8 @@ impl Lowering {
                         let name = self.chunk(name);
                         self.ops.push(Op::Prop { name, kind });
                     }
-                    Prop::Ignored | Prop::Style | Prop::Content | Prop::Ref => {
+                    Prop::Style => self.ops.push(Op::Style),
+                    Prop::Ignored | Prop::Content | Prop::Ref => {
                         self.ops.push(Op::Value);
                     }
                 }
@@ -209,7 +210,7 @@ impl Lowering {
         self.markup(&format!("</{}>", e.tag), "}]");
     }
 
-    /// A prop value as `Op::Prop`, `Op::Attributes` and `Op::Value` read it.
+    /// A prop value as `Op::Prop`, `Op::Attributes`, `Op::Style` and `Op::Value` read it.
     fn value(&mut self, value: &Value) {
         match value {
             Value::String(s) => {
@@ -229,6 +230,13 @@ impl Lowering {
             }
             Value::Undefined => {
                 self.input.tag(tag::UNDEFINED);
+            }
+            Value::Style(entries) => {
+                self.input.tag(tag::OBJECT).count(entries.len());
+                for (name, value) in entries {
+                    self.input.string(name);
+                    self.value(value);
+                }
             }
         }
     }

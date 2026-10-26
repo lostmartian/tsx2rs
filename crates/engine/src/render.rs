@@ -1,7 +1,7 @@
 //! The interpreter: runs a template program over its input and writes HTML and Flight.
 
 use crate::input::{Input, Primitive};
-use crate::{RenderError, flight, html};
+use crate::{RenderError, flight, html, style};
 use tsx2rs_ir::attribute::{self, ElementRules, Kind, Prop};
 use tsx2rs_ir::input::{island, tag};
 use tsx2rs_ir::{ChunkId, Op, Program};
@@ -123,6 +123,7 @@ impl Renderer<'_, '_> {
                     self.last_text = false;
                     flight::string(&mut self.out.flight, s);
                 }
+                Op::Style => self.style(input)?,
                 Op::Value => self.value(input, 0)?,
                 Op::Child => self.child(input, 0)?,
                 Op::Island => self.island(input)?,
@@ -177,15 +178,25 @@ impl Renderer<'_, '_> {
         for i in 0..count {
             let name_offset = input.offset();
             let prop = input.string()?;
+            if i > 0 {
+                self.out.flight.push(b',');
+            }
+            flight::key(&mut self.out.flight, prop);
+            self.out.flight.push(b':');
+            let class = attribute::classify(prop, rules);
+            if class == Prop::Style {
+                self.style(input)?;
+                continue;
+            }
             let offset = input.offset();
             let value = input.primitive()?;
             let present = !matches!(value, Primitive::Undefined | Primitive::Null);
-            match attribute::classify(prop, rules) {
+            match class {
                 Prop::Attribute { name, kind } => {
                     html::attribute(&mut self.out.html, name.as_bytes(), kind, value)
                         .map_err(|_| RenderError::InvalidValue { offset })?;
                 }
-                Prop::Style | Prop::Content if present => {
+                Prop::Content if present => {
                     return Err(RenderError::UnsupportedProp {
                         offset: name_offset,
                     });
@@ -193,15 +204,52 @@ impl Renderer<'_, '_> {
                 Prop::Ref if present => return Err(RenderError::InvalidValue { offset }),
                 Prop::Style | Prop::Content | Prop::Ref | Prop::Ignored => {}
             }
-            if i > 0 {
-                self.out.flight.push(b',');
-            }
-            flight::key(&mut self.out.flight, prop);
-            self.out.flight.push(b':');
             flight::primitive(&mut self.out.flight, value);
         }
         if comma_after && count > 0 {
             self.out.flight.push(b',');
+        }
+        Ok(())
+    }
+
+    /// A `style` prop: an object of CSS properties as React DOM writes it (`pushStyleAttribute`),
+    /// or nothing for `null` / `undefined`; in Flight the value.
+    fn style(&mut self, input: &mut Input<'_>) -> Result<(), RenderError> {
+        let offset = input.offset();
+        match input.u8()? {
+            tag::UNDEFINED => self.out.flight.extend_from_slice(flight::UNDEFINED),
+            tag::NULL => self.out.flight.extend_from_slice(b"null"),
+            tag::OBJECT => {
+                let count = input.u32()?;
+                let mut empty = true;
+                self.out.flight.push(b'{');
+                for i in 0..count {
+                    let name = input.string()?;
+                    let value = input.primitive()?;
+                    if style::is_written(value) {
+                        let separator: &[u8] = if empty { b" style=\"" } else { b";" };
+                        self.out.html.extend_from_slice(separator);
+                        style::entry(&mut self.out.html, name, value);
+                        empty = false;
+                    }
+                    if i > 0 {
+                        self.out.flight.push(b',');
+                    }
+                    flight::key(&mut self.out.flight, name);
+                    self.out.flight.push(b':');
+                    flight::primitive(&mut self.out.flight, value);
+                }
+                if !empty {
+                    self.out.html.push(b'"');
+                }
+                self.out.flight.push(b'}');
+            }
+            // React throws on a `style` that isn't an object ("The `style` prop expects a
+            // mapping from style properties to values, not a string").
+            tag::FALSE | tag::TRUE | tag::NUMBER | tag::STRING | tag::BIGINT => {
+                return Err(RenderError::InvalidValue { offset });
+            }
+            tag => return Err(RenderError::BadTag { offset, tag }),
         }
         Ok(())
     }

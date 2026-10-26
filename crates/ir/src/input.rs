@@ -7,7 +7,8 @@
 //! | [`Op::Text`](crate::Op::Text), [`Op::RawHtml`](crate::Op::RawHtml) | string: `u32` LE byte length, then UTF-8 bytes |
 //! | [`Op::Number`](crate::Op::Number) | `f64` LE |
 //! | [`Op::Prop`](crate::Op::Prop) | a tagged primitive: [`tag::UNDEFINED`], [`tag::NULL`], [`tag::FALSE`], [`tag::TRUE`], [`tag::NUMBER`], [`tag::STRING`] or [`tag::BIGINT`], with its value |
-//! | [`Op::Attributes`](crate::Op::Attributes) | `u32` LE count, then per prop: its name (string) and a tagged primitive |
+//! | [`Op::Attributes`](crate::Op::Attributes) | `u32` LE count, then per prop: its name (string) and a tagged primitive, or for `style` a style value |
+//! | [`Op::Style`](crate::Op::Style) | a style value: [`tag::UNDEFINED`], [`tag::NULL`], or [`tag::OBJECT`] with `u32` LE count + (string name, tagged primitive) pairs |
 //! | [`Op::If`](crate::Op::If) | `u8`: 0 false, 1 true |
 //! | [`Op::Loop`](crate::Op::Loop) | `u32` LE count |
 //! | [`Op::Island`](crate::Op::Island) | string (React's HTML), then a flags byte ([`island::TEXT_START`], [`island::TEXT_END`]) |

@@ -166,6 +166,40 @@ fn spread_attributes() -> Case {
     case(&chunks, ops, w.finish())
 }
 
+/// 500 `<span style={{…}}>` elements, each with 3 style entries.
+fn style() -> Case {
+    let mut w = InputWriter::new();
+    w.count(500);
+    for i in 0..500 {
+        w.tag(tag::OBJECT).count(3);
+        w.string("backgroundColor")
+            .tag(tag::STRING)
+            .string("rgb(10, 20, 30)");
+        w.string("marginTop")
+            .tag(tag::NUMBER)
+            .number(f64::from(i % 16));
+        w.string("opacity").tag(tag::NUMBER).number(0.5);
+    }
+    let chunks = [
+        "<span",                         // 0
+        r#"["$","span",null,{"style":"#, // 1
+        "></span>",                      // 2
+        "}]",                            // 3
+        ",",                             // 4
+    ];
+    let ops = vec![
+        Op::Loop {
+            end: OpIndex(4),
+            separator: Some(ChunkId(4)),
+        },
+        stat(0, 1),
+        Op::Style,
+        stat(2, 3),
+        Op::EndLoop,
+    ];
+    case(&chunks, ops, w.finish())
+}
+
 /// Client-component props: an array of 100 variant objects (Flight only).
 fn props() -> Case {
     let mut w = InputWriter::new();
@@ -192,6 +226,7 @@ fn bench(c: &mut Criterion) {
         ("text_list", text_list()),
         ("attributes", attributes()),
         ("spread_attributes", spread_attributes()),
+        ("style", style()),
         ("props", props()),
     ] {
         let mut out = Output::new();
