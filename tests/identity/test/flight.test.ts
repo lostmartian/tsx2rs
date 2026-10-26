@@ -189,6 +189,14 @@ describe("decodeFlight", () => {
     expect(decode('0:"$2:a:x"\n1:{"x":5}\n2:{"a":"$1"}\n').root).toBe(5);
   });
 
+  it("decodes hints as plain JSON, where `$` means nothing", () => {
+    const flight = decode(':HL["$","image"]\n:HL["$1",{"x":"$@2"}]\n0:null\n');
+    expect(flight.hints).toEqual([
+      ["L", ["$", "image"]],
+      ["L", ["$1", { x: "$@2" }]],
+    ]);
+  });
+
   it("decodes hints and a stream's items and close value", () => {
     const flight = decode(':HL["/f.woff2","font"]\n0:{"meta":"$@7"}\n7:X\n7:{"t":"a"}\n7:C\n');
     expect(flight.hints).toEqual([["L", ["/f.woff2", "font"]]]);
