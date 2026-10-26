@@ -1,5 +1,34 @@
 //! The few JavaScript semantics React DOM's attribute rules depend on.
 
+use crate::input::Primitive;
+
+/// JavaScript's `"" + value` for a primitive, unescaped.
+pub(crate) fn to_string(out: &mut Vec<u8>, value: Primitive<'_>) {
+    match value {
+        Primitive::Undefined => out.extend_from_slice(b"undefined"),
+        Primitive::Null => out.extend_from_slice(b"null"),
+        Primitive::Bool(b) => out.extend_from_slice(if b { b"true" } else { b"false" }),
+        Primitive::Number(n) => crate::html::number(out, n),
+        Primitive::String(s) | Primitive::BigInt(s) => out.extend_from_slice(s.as_bytes()),
+    }
+}
+
+/// JavaScript truthiness.
+pub(crate) fn is_truthy(value: Primitive<'_>) -> bool {
+    match value {
+        Primitive::Bool(b) => b,
+        Primitive::Number(n) => n != 0.0 && !n.is_nan(),
+        Primitive::String(s) => !s.is_empty(),
+        Primitive::BigInt(digits) => digits != "0",
+        Primitive::Undefined | Primitive::Null => false,
+    }
+}
+
+/// `null` or `undefined` (`value == null`).
+pub(crate) const fn is_nullish(value: Primitive<'_>) -> bool {
+    matches!(value, Primitive::Undefined | Primitive::Null)
+}
+
 /// JavaScript's `Number(s)` for a string (ECMAScript `StringToNumber`): surrounding whitespace is
 /// ignored, `""` is 0, decimal literals (with `Infinity`, signs, fractions and exponents),
 /// `0x`/`0o`/`0b` literals (unsigned), and `NaN` for anything else.

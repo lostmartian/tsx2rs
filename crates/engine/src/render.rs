@@ -1,7 +1,10 @@
 //! The interpreter: runs a template program over its input and writes HTML and Flight.
 
+mod element;
+
 use crate::input::{Input, Primitive};
 use crate::{RenderError, flight, html, style};
+use element::Context;
 use tsx2rs_ir::attribute::{self, ElementRules, Kind, Prop};
 use tsx2rs_ir::input::{island, tag};
 use tsx2rs_ir::{ChunkId, Op, Program};
@@ -123,9 +126,9 @@ impl Renderer<'_, '_> {
                     self.last_text = false;
                     flight::string(&mut self.out.flight, s);
                 }
-                Op::Style => self.style(input)?,
+                Op::Style => self.style(input, true)?,
                 Op::Value => self.value(input, 0)?,
-                Op::Child => self.child(input, 0)?,
+                Op::Child => self.child(input, 0, Context::BODY)?,
                 Op::Island => self.island(input)?,
                 Op::Loop { end, separator } => {
                     let count = input.u32()?;
@@ -185,7 +188,7 @@ impl Renderer<'_, '_> {
             self.out.flight.push(b':');
             let class = attribute::classify(prop, rules);
             if class == Prop::Style {
-                self.style(input)?;
+                self.style(input, true)?;
                 continue;
             }
             let offset = input.offset();
@@ -213,16 +216,19 @@ impl Renderer<'_, '_> {
     }
 
     /// A `style` prop: an object of CSS properties as React DOM writes it (`pushStyleAttribute`),
-    /// or nothing for `null` / `undefined`; in Flight the value.
-    fn style(&mut self, input: &mut Input<'_>) -> Result<(), RenderError> {
+    /// or nothing for `null` / `undefined`; in Flight (if `flight`) the value.
+    fn style(&mut self, input: &mut Input<'_>, flight: bool) -> Result<(), RenderError> {
         let offset = input.offset();
         match input.u8()? {
-            tag::UNDEFINED => self.out.flight.extend_from_slice(flight::UNDEFINED),
-            tag::NULL => self.out.flight.extend_from_slice(b"null"),
+            tag::UNDEFINED if flight => self.out.flight.extend_from_slice(flight::UNDEFINED),
+            tag::NULL if flight => self.out.flight.extend_from_slice(b"null"),
+            tag::UNDEFINED | tag::NULL => {}
             tag::OBJECT => {
                 let count = input.u32()?;
                 let mut empty = true;
-                self.out.flight.push(b'{');
+                if flight {
+                    self.out.flight.push(b'{');
+                }
                 for i in 0..count {
                     let name = input.string()?;
                     let value = input.primitive()?;
@@ -232,17 +238,21 @@ impl Renderer<'_, '_> {
                         style::entry(&mut self.out.html, name, value);
                         empty = false;
                     }
-                    if i > 0 {
-                        self.out.flight.push(b',');
+                    if flight {
+                        if i > 0 {
+                            self.out.flight.push(b',');
+                        }
+                        flight::key(&mut self.out.flight, name);
+                        self.out.flight.push(b':');
+                        flight::primitive(&mut self.out.flight, value);
                     }
-                    flight::key(&mut self.out.flight, name);
-                    self.out.flight.push(b':');
-                    flight::primitive(&mut self.out.flight, value);
                 }
                 if !empty {
                     self.out.html.push(b'"');
                 }
-                self.out.flight.push(b'}');
+                if flight {
+                    self.out.flight.push(b'}');
+                }
             }
             // React throws on a `style` that isn't an object ("The `style` prop expects a
             // mapping from style properties to values, not a string").
@@ -304,7 +314,12 @@ impl Renderer<'_, '_> {
 
     /// A node known only at runtime, as React DOM's server renders a child (`renderNodeDestructive`
     /// in `react-dom-server`, 19.3.1) and React's Flight server serializes it.
-    fn child(&mut self, input: &mut Input<'_>, depth: usize) -> Result<(), RenderError> {
+    fn child<'i>(
+        &mut self,
+        input: &mut Input<'i>,
+        depth: usize,
+        context: Context<'i>,
+    ) -> Result<(), RenderError> {
         let offset = input.offset();
         if depth > MAX_VALUE_DEPTH {
             return Err(RenderError::TooDeep { offset });
@@ -339,12 +354,12 @@ impl Renderer<'_, '_> {
                     if i > 0 {
                         self.out.flight.push(b',');
                     }
-                    self.child(input, depth + 1)?;
+                    self.child(input, depth + 1, context)?;
                 }
                 self.out.flight.push(b']');
             }
-            // An object isn't a node here: element values come through their own op, and React
-            // rejects any other object, so the encoder never writes one.
+            tag::ELEMENT => self.element(input, depth, context)?,
+            // React rejects any other object as a node, so the encoder never writes one.
             tag => return Err(RenderError::BadTag { offset, tag }),
         }
         Ok(())

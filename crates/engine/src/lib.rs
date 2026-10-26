@@ -49,18 +49,29 @@ pub enum RenderError {
         offset: usize,
     },
     /// A value React itself would throw on: a bigint for a numeric attribute (React's `isNaN`
-    /// throws a `TypeError`), a `style` that isn't an object, or a `ref` on a host element. The
-    /// request falls back, and Next.js reports the error.
+    /// throws a `TypeError`), a `style` that isn't an object, a `ref` on a host element, an
+    /// invalid tag, or content an element can't have (`children` on a void element, both
+    /// `children` and `dangerouslySetInnerHTML`, …). The request falls back, and Next.js reports
+    /// the error.
     #[error("a value React rejects at byte {offset}")]
     InvalidValue {
         /// Where the value starts.
         offset: usize,
     },
     /// A prop an [`Op::Attributes`](tsx2rs_ir::Op::Attributes) object can't hold: content
-    /// (`children`, `dangerouslySetInnerHTML`), which the template writes.
+    /// (`children`, `dangerouslySetInnerHTML`), which the template writes. Also a second
+    /// `children` entry in an element node.
     #[error("unsupported prop at byte {offset}")]
     UnsupportedProp {
         /// Where the prop's name starts.
+        offset: usize,
+    },
+    /// An element this engine doesn't render yet (ADR-0007): one React DOM hoists into
+    /// `<head>` (`<title>`, `<meta>`, `<link>`, `<script>`, `<style>`, an `<img>` it preloads), or
+    /// `<html>`, `<head>`, `<body>`. The request falls back.
+    #[error("unsupported element at byte {offset}")]
+    UnsupportedElement {
+        /// Where the element's type starts.
         offset: usize,
     },
     /// A condition byte other than 0 or 1.
