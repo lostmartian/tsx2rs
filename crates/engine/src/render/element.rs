@@ -811,6 +811,7 @@ fn option_text(input: &mut Input<'_>, depth: usize, out: &mut Vec<u8>) -> Result
             input.skip_element(depth)?;
             out.extend_from_slice(b"[object Object]");
         }
+        tag::TEMPLATE => return Err(RenderError::UnsupportedElement { offset }),
         tag => return Err(RenderError::BadTag { offset, tag }),
     }
     Ok(())
@@ -858,6 +859,7 @@ fn node_string(input: &mut Input<'_>, depth: usize, out: &mut Vec<u8>) -> Result
             input.skip_element(depth)?;
             out.extend_from_slice(b"[object Object]");
         }
+        tag::TEMPLATE => return Err(RenderError::UnsupportedElement { offset }),
         _ => {
             *input = start;
             js::to_string(out, input.primitive()?);

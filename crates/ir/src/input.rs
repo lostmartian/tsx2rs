@@ -13,7 +13,7 @@
 //! | [`Op::Loop`](crate::Op::Loop) | `u32` LE count |
 //! | [`Op::Island`](crate::Op::Island) | string (React's HTML), then a flags byte ([`island::TEXT_START`], [`island::TEXT_END`]) |
 //! | [`Op::Value`](crate::Op::Value) | a tagged value: any [`tag`], arrays as `u32` count + values, objects as `u32` count + (string key, value) pairs |
-//! | [`Op::Child`](crate::Op::Child) | a tagged node: [`tag::UNDEFINED`], [`tag::NULL`], [`tag::FALSE`], [`tag::TRUE`], [`tag::NUMBER`], [`tag::STRING`], [`tag::BIGINT`], [`tag::ARRAY`] with `u32` count + nodes, or [`tag::ELEMENT`] (below) |
+//! | [`Op::Child`](crate::Op::Child) | a tagged node: [`tag::UNDEFINED`], [`tag::NULL`], [`tag::FALSE`], [`tag::TRUE`], [`tag::NUMBER`], [`tag::STRING`], [`tag::BIGINT`], [`tag::ARRAY`] with `u32` count + nodes, [`tag::ELEMENT`] (below), or [`tag::TEMPLATE`] with a `u32` template index + that template's input |
 //!
 //! An element node (ADR-0007) is a host element, its props in the props object's order:
 //!
@@ -50,6 +50,9 @@ pub mod tag {
     pub const BIGINT: u8 = 8;
     /// A host element (a node; its type, key and props follow, see the [module docs](super)).
     pub const ELEMENT: u8 = 9;
+    /// A compiled component's output (a node, ADR-0008): a `u32` LE template index, then that
+    /// template's input.
+    pub const TEMPLATE: u8 = 10;
 }
 
 /// Flags for [`Op::Island`](crate::Op::Island): the island's HTML begins / ends with text.

@@ -30,7 +30,7 @@ tsx2rs is a **Next.js Deployment Adapter**. A Next.js app turns it on with one l
 
 ### `crates/ir`
 The shared vocabulary.
-- **`Program`:** a chunk table plus semantic ops: static output, text, number, props (React DOM's attribute rules, for names known at compile time and for props objects known only at runtime, `ir::attribute`), `style` objects, raw HTML, generic values, runtime-typed children (text, arrays and element values, [ADR-0007](docs/adr/0007-element-values.md)), islands, loops, branches.
+- **`Program`:** a chunk table plus a table of templates (one per compiled component that isn't inlined, template 0 the entry, [ADR-0008](docs/adr/0008-template-calls.md)), each a list of semantic ops: static output, text, number, props (React DOM's attribute rules, for names known at compile time and for props objects known only at runtime, `ir::attribute`), `style` objects, raw HTML, generic values, runtime-typed children (text, arrays, element values and compiled components known only at runtime, [ADR-0007](docs/adr/0007-element-values.md)), islands, loops, branches, and calls to other templates.
 - **Its binary format:** magic, version, chunks, ops.
 - **The input format** the generated encoder writes (`ir::input`): values in program order, as length-prefixed UTF-8, `f64`, tags and counts.
 
@@ -43,7 +43,7 @@ Source → templates + data functions → programs, in phases with one module ea
 3. **Component usage:** server, client and React built-in components (`"use client"`, re-exports)
 4. **Templates:** JSX in template positions becomes a template; other JSX stays real JSX and becomes an element value at runtime *(planned)*
 5. **Data functions:** span-based rewriting of the component's own code, with each returned JSX replaced by its hole values *(planned)*
-6. **Linking:** child components, slots and `Call` for recursion and runtime components *(planned)*
+6. **Linking:** child components, slots, and `Call` or template nodes for recursion and runtime components *(planned; the engine side exists)*
 7. **Lowering** to programs, and the **encoder** from the same traversal *(planned)*
 
 Each phase is a pure function of its input. Its **diagnostics** have a stable code, a message, a source span and a severity: an *error* makes the route fall back, and a *note* names a part that React renders at request time. The compiler never guesses.

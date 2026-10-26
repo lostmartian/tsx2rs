@@ -138,6 +138,8 @@ impl<'a> Input<'a> {
                 }
             }
             tag::ELEMENT => self.skip_element(depth)?,
+            // Only running its template knows where a compiled component's input ends.
+            tag::TEMPLATE => return Err(RenderError::UnsupportedElement { offset }),
             tag => return Err(RenderError::BadTag { offset, tag }),
         }
         Ok(())

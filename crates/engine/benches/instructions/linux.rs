@@ -19,6 +19,7 @@ fn prepared(case: cases::Case) -> (cases::Case, Output) {
 #[bench::style(prepared(cases::style()))]
 #[bench::props(prepared(cases::props()))]
 #[bench::element_values(prepared(cases::element_values()))]
+#[bench::calls(prepared(cases::calls()))]
 fn render_case((case, mut out): (cases::Case, Output)) -> Output {
     render(black_box(&case.program), black_box(&case.input), &mut out).unwrap();
     out

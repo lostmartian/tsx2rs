@@ -68,11 +68,20 @@ pub enum RenderError {
     },
     /// An element this engine doesn't render yet (ADR-0007): one React DOM hoists into
     /// `<head>` (`<title>`, `<meta>`, `<link>`, `<script>`, `<style>`, an `<img>` it preloads), or
-    /// `<html>`, `<head>`, `<body>`. The request falls back.
+    /// `<html>`, `<head>`, `<body>`. Also a compiled component where React only turns it into a
+    /// string (inside a `<textarea>` or an `<option>`'s text). The request falls back.
     #[error("unsupported element at byte {offset}")]
     UnsupportedElement {
         /// Where the element's type starts.
         offset: usize,
+    },
+    /// A template node whose template doesn't exist.
+    #[error("bad template {template} at byte {offset}")]
+    BadTemplate {
+        /// Where the node starts.
+        offset: usize,
+        /// The template index.
+        template: u32,
     },
     /// A condition byte other than 0 or 1.
     #[error("bad condition {value} at byte {offset}")]

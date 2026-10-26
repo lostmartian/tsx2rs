@@ -12,7 +12,7 @@ pub mod input;
 mod program;
 
 pub use format::MAGIC;
-pub use program::{ChunkId, Op, OpIndex, Program};
+pub use program::{ChunkId, Op, OpIndex, Program, TemplateId};
 
 /// Version of the template-program format written by the compiler and read by the engine.
 ///
@@ -89,5 +89,24 @@ pub enum FormatError {
     LoopReadsNothing {
         /// The loop's index.
         op: usize,
+    },
+    /// A program without templates.
+    #[error("program has no templates")]
+    NoTemplates,
+    /// A call to a template that doesn't exist.
+    #[error("op {op} calls template {template}, which doesn't exist")]
+    TemplateOutOfRange {
+        /// The op's index.
+        op: usize,
+        /// The missing template.
+        template: u32,
+    },
+    /// A rule broken inside a template; op indices in `error` are the template's.
+    #[error("in template {template}: {error}")]
+    InTemplate {
+        /// The template.
+        template: u32,
+        /// The rule it breaks.
+        error: Box<FormatError>,
     },
 }

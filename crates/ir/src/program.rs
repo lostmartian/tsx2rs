@@ -1,6 +1,8 @@
 //! Template programs: what the compiler emits for a template and the engine runs.
 //!
-//! A program is a table of precomputed byte chunks plus a list of [`Op`]s. Ops are *semantic*
+//! A program is a table of precomputed byte chunks plus a table of *templates*, each a list of
+//! [`Op`]s: one per compiled component that isn't linked into its caller (ADR-0008). Template 0
+//! is the entry; [`Op::Call`] runs another. Ops are *semantic*
 //! (a text child, an optional string attribute, a loop over a list); the engine knows how each one
 //! is written in HTML and in Flight, and writes both outputs in one pass. Fully static parts of a
 //! template are a single [`Op::Static`] that copies one precomputed chunk to each output.
@@ -18,9 +20,13 @@ use crate::attribute::{ElementRules, Kind};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ChunkId(pub u32);
 
-/// Index into a program's op list.
+/// Index into a template's op list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct OpIndex(pub u32);
+
+/// Index into a program's template table. Template 0 is the entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TemplateId(pub u32);
 
 /// One instruction of a template program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,15 +113,22 @@ pub enum Op {
         /// Where to continue.
         to: OpIndex,
     },
+    /// Runs another template here, reading its values from the input in order: a compiled
+    /// component the compiler didn't link into its caller (recursion, ADR-0005 section 6). Writes
+    /// nothing itself: a server component's output is its template's.
+    Call {
+        /// The template to run.
+        template: TemplateId,
+    },
 }
 
 impl Op {
-    /// Whether this op reads a value from the input.
+    /// Whether this op reads a value from the input itself ([`Op::Call`]'s template may).
     #[must_use]
     pub const fn reads_input(self) -> bool {
         !matches!(
             self,
-            Self::Static { .. } | Self::EndLoop | Self::Jump { .. }
+            Self::Static { .. } | Self::EndLoop | Self::Jump { .. } | Self::Call { .. }
         )
     }
 }
@@ -124,23 +137,49 @@ impl Op {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
     chunks: Vec<Box<[u8]>>,
-    ops: Vec<Op>,
+    templates: Vec<Vec<Op>>,
 }
 
 impl Program {
-    /// Builds a program, checking every rule the engine relies on:
-    /// - every chunk id is in range;
-    /// - `If` and `Jump` targets point forward, within the program, not out of their loop and not
-    ///   into a loop that starts after them;
-    /// - `Loop`/`EndLoop` pairs nest properly, and each `Loop.end` is its own `EndLoop`;
-    /// - every loop body reads input, so a loop can't run more times than the input has bytes.
+    /// Builds a program with one template.
     ///
     /// # Errors
     ///
-    /// Returns the first rule the program breaks.
+    /// As [`Program::with_templates`].
     pub fn new(chunks: Vec<Box<[u8]>>, ops: Vec<Op>) -> Result<Self, FormatError> {
-        validate(&chunks, &ops)?;
-        Ok(Self { chunks, ops })
+        Self::with_templates(chunks, vec![ops])
+    }
+
+    /// Builds a program from its templates (the first is the entry), checking every rule the
+    /// engine relies on:
+    /// - there is at least one template;
+    /// - every chunk id and [`Op::Call`] template is in range;
+    /// - `If` and `Jump` targets point forward, within their template, not out of their loop and
+    ///   not into a loop that starts after them;
+    /// - `Loop`/`EndLoop` pairs nest properly, and each `Loop.end` is its own `EndLoop`;
+    /// - every loop body reads input, itself or through a template it calls, so a loop can't run
+    ///   more times than the input has bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first rule the program breaks; a rule inside a template as
+    /// [`FormatError::InTemplate`].
+    pub fn with_templates(
+        chunks: Vec<Box<[u8]>>,
+        templates: Vec<Vec<Op>>,
+    ) -> Result<Self, FormatError> {
+        if templates.is_empty() {
+            return Err(FormatError::NoTemplates);
+        }
+        let count = u32::try_from(templates.len()).map_err(|_| FormatError::TooLarge)?;
+        let reads = templates_reading_input(&templates);
+        for (template, ops) in templates.iter().enumerate() {
+            validate(&chunks, ops, count, &reads).map_err(|error| FormatError::InTemplate {
+                template: u32::try_from(template).unwrap_or(u32::MAX),
+                error: Box::new(error),
+            })?;
+        }
+        Ok(Self { chunks, templates })
     }
 
     /// The chunk table.
@@ -149,10 +188,22 @@ impl Program {
         &self.chunks
     }
 
-    /// The ops, in order.
+    /// The entry template's ops, in order.
     #[must_use]
     pub fn ops(&self) -> &[Op] {
-        &self.ops
+        self.template(TemplateId(0))
+    }
+
+    /// The template table.
+    #[must_use]
+    pub fn templates(&self) -> &[Vec<Op>] {
+        &self.templates
+    }
+
+    /// A template's ops. Every `Op::Call` template in a validated program is in range.
+    #[must_use]
+    pub fn template(&self, id: TemplateId) -> &[Op] {
+        self.templates.get(id.0 as usize).map_or(&[], |t| t)
     }
 
     /// The bytes of a chunk. Every `ChunkId` in a validated program is in range.
@@ -162,7 +213,37 @@ impl Program {
     }
 }
 
-fn validate(chunks: &[Box<[u8]>], ops: &[Op]) -> Result<(), FormatError> {
+/// Which templates read input when they run: an op that reads, or a call to a template that
+/// does (a fixed point, for calls in any order and recursion).
+fn templates_reading_input(templates: &[Vec<Op>]) -> Vec<bool> {
+    let mut reads: Vec<bool> = templates
+        .iter()
+        .map(|ops| ops.iter().any(|op| op.reads_input()))
+        .collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (t, ops) in templates.iter().enumerate() {
+            if !reads[t] && ops.iter().any(|op| calls_reading(*op, &reads)) {
+                reads[t] = true;
+                changed = true;
+            }
+        }
+    }
+    reads
+}
+
+/// A call to a template that reads input.
+fn calls_reading(op: Op, reads: &[bool]) -> bool {
+    matches!(op, Op::Call { template } if reads.get(template.0 as usize) == Some(&true))
+}
+
+fn validate(
+    chunks: &[Box<[u8]>],
+    ops: &[Op],
+    templates: u32,
+    reads: &[bool],
+) -> Result<(), FormatError> {
     let op_count = u32::try_from(ops.len()).map_err(|_| FormatError::TooLarge)?;
     let chunk_in_range = |id: ChunkId, at: usize| {
         if (id.0 as usize) < chunks.len() {
@@ -177,7 +258,7 @@ fn validate(chunks: &[Box<[u8]>], ops: &[Op]) -> Result<(), FormatError> {
     // Open loops: (index of the Loop op, whether its body has read input so far).
     let mut loops: Vec<(usize, bool)> = Vec::new();
     for (at, op) in ops.iter().enumerate() {
-        if op.reads_input()
+        if (op.reads_input() || calls_reading(*op, reads))
             && let Some(open) = loops.last_mut()
         {
             open.1 = true;
@@ -188,6 +269,14 @@ fn validate(chunks: &[Box<[u8]>], ops: &[Op]) -> Result<(), FormatError> {
                 chunk_in_range(flight, at)?;
             }
             Op::Prop { name, .. } => chunk_in_range(name, at)?,
+            Op::Call { template } => {
+                if template.0 >= templates {
+                    return Err(FormatError::TemplateOutOfRange {
+                        op: at,
+                        template: template.0,
+                    });
+                }
+            }
             Op::Loop { end, separator } => {
                 if let Some(separator) = separator {
                     chunk_in_range(separator, at)?;
@@ -242,8 +331,12 @@ fn validate(chunks: &[Box<[u8]>], ops: &[Op]) -> Result<(), FormatError> {
     if let Some(&(start, _)) = loops.last() {
         return Err(FormatError::UnclosedLoop { op: start });
     }
-    // A branch may not land inside (or on the end of) a loop that starts after it: the engine
-    // would reach that loop's EndLoop without having entered the loop.
+    check_branches_into_loops(ops)
+}
+
+/// A branch may not land inside (or on the end of) a loop that starts after it: the engine would
+/// reach that loop's `EndLoop` without having entered the loop.
+fn check_branches_into_loops(ops: &[Op]) -> Result<(), FormatError> {
     for (at, op) in ops.iter().enumerate() {
         let (Op::If { else_: target } | Op::Jump { to: target }) = *op else {
             continue;
