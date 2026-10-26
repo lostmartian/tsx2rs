@@ -14,5 +14,6 @@ Format: [MADR](https://adr.github.io/madr/)-style. Context → Decision → Cons
 | [0006](0006-instruction-counts-for-pull-requests.md) | Judge pull requests' performance by instruction counts, measured in CI | Accepted |
 | [0007](0007-element-values.md) | Element values are a node kind that `Child` reads | Accepted |
 | [0008](0008-template-calls.md) | Templates call templates: one program per route, with a template table | Accepted |
+| [0009](0009-hoistables-in-place.md) | Hoistable elements rendered in place, and the document's elements inside the body | Accepted |
 
 Background research (benchmarks, spikes, the full decision history before this repository existed) lives in the separate `tsx2rs-lab` repository.
