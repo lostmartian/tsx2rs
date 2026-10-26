@@ -4,7 +4,7 @@
 use tsx2rs_engine::{Output, render};
 use tsx2rs_ir::attribute::{ElementRules, Kind};
 use tsx2rs_ir::input::{InputWriter, tag};
-use tsx2rs_ir::{ChunkId, Op, OpIndex, Program};
+use tsx2rs_ir::{ChunkId, Op, OpIndex, Program, TemplateId};
 
 /// A program plus its input, and the size of what one render writes.
 #[derive(Debug)]
@@ -26,7 +26,12 @@ impl Case {
 }
 
 fn case(chunks: &[&str], ops: Vec<Op>, input: Vec<u8>) -> Case {
-    let program = Program::new(chunks.iter().map(|c| c.as_bytes().into()).collect(), ops).unwrap();
+    case_with_templates(chunks, vec![ops], input)
+}
+
+fn case_with_templates(chunks: &[&str], templates: Vec<Vec<Op>>, input: Vec<u8>) -> Case {
+    let chunks = chunks.iter().map(|c| c.as_bytes().into()).collect();
+    let program = Program::with_templates(chunks, templates).unwrap();
     let mut out = Output::new();
     render(&program, &input, &mut out).unwrap();
     Case {
@@ -89,6 +94,41 @@ pub(crate) fn text_list() -> Case {
         "]",
     ];
     case(&chunks, ops, w.finish())
+}
+
+/// `text_list`'s first 500 items, each `<li>` rendered by an `<Item>` template through
+/// `Op::Call` (ADR-0008), as for components the compiler doesn't inline.
+pub(crate) fn calls() -> Case {
+    let mut w = InputWriter::new();
+    w.count(500);
+    for i in 0..500 {
+        w.string(&format!("Item number {i}"));
+    }
+    let list = vec![
+        stat(0, 1),
+        Op::Loop {
+            end: OpIndex(3),
+            separator: Some(ChunkId(6)),
+        },
+        Op::Call {
+            template: TemplateId(1),
+        },
+        Op::EndLoop,
+        stat(7, 8),
+    ];
+    let item = vec![stat(2, 3), Op::Text, stat(4, 5)];
+    let chunks = [
+        "<ul>",
+        "[",
+        "<li>",
+        r#"["$","li",null,{"children":"#,
+        "</li>",
+        "}]",
+        ",",
+        "</ul>",
+        "]",
+    ];
+    case_with_templates(&chunks, vec![list, item], w.finish())
 }
 
 /// 500 `<button className={…} disabled={…}>` elements.
@@ -252,7 +292,7 @@ pub(crate) fn element_values() -> Case {
     dead_code,
     reason = "the instruction counts list their cases one by one"
 )]
-pub(crate) fn all() -> [(&'static str, Case); 7] {
+pub(crate) fn all() -> [(&'static str, Case); 8] {
     [
         ("static_page", static_page()),
         ("text_list", text_list()),
@@ -261,6 +301,7 @@ pub(crate) fn all() -> [(&'static str, Case); 7] {
         ("style", style()),
         ("props", props()),
         ("element_values", element_values()),
+        ("calls", calls()),
     ]
 }
 

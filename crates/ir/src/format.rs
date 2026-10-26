@@ -5,18 +5,19 @@
 //! magic      8 bytes  "TSX2RSP\0"
 //! version    u16 LE   PROGRAM_FORMAT_VERSION
 //! chunks     u32 LE count, then per chunk: u32 LE length + bytes
-//! ops        u32 LE count, then per op: u8 opcode + operands (u32 LE each; see below)
+//! templates  u32 LE count, then per template:
+//!              ops  u32 LE count, then per op: u8 opcode + operands (u32 LE each; see below)
 //! ```
 //!
 //! Opcodes and operands: 0 `Static` (html, flight, then one flags byte: bit 0 `text_start`,
 //! bit 1 `text_end`), 1 `Text`, 2 `Number`, 3 `Prop` (name, then a [`Kind`] byte),
 //! 4 `Attributes` (an [`ElementRules`] byte, then a flags byte: bit 0 `comma_after`), 5
 //! `RawHtml`, 6 `Value`, 7 `Island`, 8 `Loop` (end, separator + 1 or 0 for none), 9 `EndLoop`,
-//! 10 `If` (else), 11 `Jump` (to), 12 `Child`, 13 `Style`. Decoding validates the program ([`Program::new`]), and encoding is
+//! 10 `If` (else), 11 `Jump` (to), 12 `Child`, 13 `Style`, 14 `Call` (template). Decoding validates the program ([`Program::new`]), and encoding is
 //! deterministic.
 
 use crate::attribute::{ElementRules, Kind};
-use crate::{ChunkId, FormatError, Op, OpIndex, PROGRAM_FORMAT_VERSION, Program};
+use crate::{ChunkId, FormatError, Op, OpIndex, PROGRAM_FORMAT_VERSION, Program, TemplateId};
 
 /// The first bytes of every program file.
 pub const MAGIC: &[u8; 8] = b"TSX2RSP\0";
@@ -35,6 +36,7 @@ const IF: u8 = 10;
 const JUMP: u8 = 11;
 const CHILD: u8 = 12;
 const STYLE: u8 = 13;
+const CALL: u8 = 14;
 
 impl Program {
     /// Encodes the program in the binary format.
@@ -51,52 +53,11 @@ impl Program {
             put_u32(&mut out, chunk.len())?;
             out.extend_from_slice(chunk);
         }
-        put_u32(&mut out, self.ops().len())?;
-        for op in self.ops() {
-            match *op {
-                Op::Static {
-                    html,
-                    flight,
-                    text_start,
-                    text_end,
-                } => {
-                    out.push(STATIC);
-                    out.extend_from_slice(&html.0.to_le_bytes());
-                    out.extend_from_slice(&flight.0.to_le_bytes());
-                    out.push(u8::from(text_start) | (u8::from(text_end) << 1));
-                }
-                Op::Text => out.push(TEXT),
-                Op::Number => out.push(NUMBER),
-                Op::Prop { name, kind } => {
-                    out.push(PROP);
-                    out.extend_from_slice(&name.0.to_le_bytes());
-                    out.push(kind.to_byte());
-                }
-                Op::Attributes { rules, comma_after } => {
-                    out.push(ATTRIBUTES);
-                    out.push(rules.to_byte());
-                    out.push(u8::from(comma_after));
-                }
-                Op::RawHtml => out.push(RAW_HTML),
-                Op::Value => out.push(VALUE),
-                Op::Child => out.push(CHILD),
-                Op::Style => out.push(STYLE),
-                Op::Island => out.push(ISLAND),
-                Op::Loop { end, separator } => {
-                    out.push(LOOP);
-                    out.extend_from_slice(&end.0.to_le_bytes());
-                    let separator = separator.map_or(0, |c| c.0.checked_add(1).unwrap_or(0));
-                    out.extend_from_slice(&separator.to_le_bytes());
-                }
-                Op::EndLoop => out.push(END_LOOP),
-                Op::If { else_ } => {
-                    out.push(IF);
-                    out.extend_from_slice(&else_.0.to_le_bytes());
-                }
-                Op::Jump { to } => {
-                    out.push(JUMP);
-                    out.extend_from_slice(&to.0.to_le_bytes());
-                }
+        put_u32(&mut out, self.templates().len())?;
+        for ops in self.templates() {
+            put_u32(&mut out, ops.len())?;
+            for op in ops {
+                encode_op(&mut out, *op);
             }
         }
         Ok(out)
@@ -107,7 +68,7 @@ impl Program {
     /// # Errors
     ///
     /// If the bytes aren't a program of this format version, are truncated or have trailing
-    /// bytes, or describe a program that breaks a [`Program::new`] rule.
+    /// bytes, or describe a program that breaks a [`Program::with_templates`] rule.
     pub fn decode(bytes: &[u8]) -> Result<Self, FormatError> {
         let mut r = Reader { bytes, at: 0 };
         if r.take(MAGIC.len())? != MAGIC {
@@ -123,77 +84,141 @@ impl Program {
             let len = r.u32()? as usize;
             chunks.push(r.take(len)?.into());
         }
-        let op_count = r.u32()?;
-        let mut ops = Vec::new();
-        for _ in 0..op_count {
-            let at = r.at;
-            ops.push(match r.u8()? {
-                STATIC => {
-                    let html = ChunkId(r.u32()?);
-                    let flight = ChunkId(r.u32()?);
-                    let flags = r.u8()?;
-                    if flags > 0b11 {
-                        return Err(FormatError::BadOpcode {
-                            offset: at,
-                            opcode: STATIC,
-                        });
-                    }
-                    Op::Static {
-                        html,
-                        flight,
-                        text_start: flags & 1 != 0,
-                        text_end: flags & 2 != 0,
-                    }
-                }
-                TEXT => Op::Text,
-                NUMBER => Op::Number,
-                PROP => {
-                    let name = ChunkId(r.u32()?);
-                    let bad = FormatError::BadOpcode {
-                        offset: at,
-                        opcode: PROP,
-                    };
-                    let kind = Kind::from_byte(r.u8()?).ok_or(bad)?;
-                    Op::Prop { name, kind }
-                }
-                ATTRIBUTES => {
-                    let bad = FormatError::BadOpcode {
-                        offset: at,
-                        opcode: ATTRIBUTES,
-                    };
-                    let rules = ElementRules::from_byte(r.u8()?).ok_or(bad.clone())?;
-                    let comma_after = match r.u8()? {
-                        0 => false,
-                        1 => true,
-                        _ => return Err(bad),
-                    };
-                    Op::Attributes { rules, comma_after }
-                }
-                RAW_HTML => Op::RawHtml,
-                VALUE => Op::Value,
-                CHILD => Op::Child,
-                STYLE => Op::Style,
-                ISLAND => Op::Island,
-                LOOP => {
-                    let end = OpIndex(r.u32()?);
-                    let separator = r.u32()?.checked_sub(1).map(ChunkId);
-                    Op::Loop { end, separator }
-                }
-                END_LOOP => Op::EndLoop,
-                IF => Op::If {
-                    else_: OpIndex(r.u32()?),
-                },
-                JUMP => Op::Jump {
-                    to: OpIndex(r.u32()?),
-                },
-                opcode => return Err(FormatError::BadOpcode { offset: at, opcode }),
-            });
+        let template_count = r.u32()?;
+        let mut templates = Vec::new();
+        for _ in 0..template_count {
+            let op_count = r.u32()?;
+            let mut ops = Vec::new();
+            for _ in 0..op_count {
+                ops.push(decode_op(&mut r)?);
+            }
+            templates.push(ops);
         }
         if r.at != bytes.len() {
             return Err(FormatError::TrailingBytes { offset: r.at });
         }
-        Program::new(chunks, ops)
+        Program::with_templates(chunks, templates)
     }
+}
+
+fn encode_op(out: &mut Vec<u8>, op: Op) {
+    match op {
+        Op::Static {
+            html,
+            flight,
+            text_start,
+            text_end,
+        } => {
+            out.push(STATIC);
+            out.extend_from_slice(&html.0.to_le_bytes());
+            out.extend_from_slice(&flight.0.to_le_bytes());
+            out.push(u8::from(text_start) | (u8::from(text_end) << 1));
+        }
+        Op::Text => out.push(TEXT),
+        Op::Number => out.push(NUMBER),
+        Op::Prop { name, kind } => {
+            out.push(PROP);
+            out.extend_from_slice(&name.0.to_le_bytes());
+            out.push(kind.to_byte());
+        }
+        Op::Attributes { rules, comma_after } => {
+            out.push(ATTRIBUTES);
+            out.push(rules.to_byte());
+            out.push(u8::from(comma_after));
+        }
+        Op::RawHtml => out.push(RAW_HTML),
+        Op::Value => out.push(VALUE),
+        Op::Child => out.push(CHILD),
+        Op::Style => out.push(STYLE),
+        Op::Island => out.push(ISLAND),
+        Op::Loop { end, separator } => {
+            out.push(LOOP);
+            out.extend_from_slice(&end.0.to_le_bytes());
+            let separator = separator.map_or(0, |c| c.0.checked_add(1).unwrap_or(0));
+            out.extend_from_slice(&separator.to_le_bytes());
+        }
+        Op::EndLoop => out.push(END_LOOP),
+        Op::If { else_ } => {
+            out.push(IF);
+            out.extend_from_slice(&else_.0.to_le_bytes());
+        }
+        Op::Jump { to } => {
+            out.push(JUMP);
+            out.extend_from_slice(&to.0.to_le_bytes());
+        }
+        Op::Call { template } => {
+            out.push(CALL);
+            out.extend_from_slice(&template.0.to_le_bytes());
+        }
+    }
+}
+
+fn decode_op(r: &mut Reader<'_>) -> Result<Op, FormatError> {
+    let at = r.at;
+    Ok(match r.u8()? {
+        STATIC => {
+            let html = ChunkId(r.u32()?);
+            let flight = ChunkId(r.u32()?);
+            let flags = r.u8()?;
+            if flags > 0b11 {
+                return Err(FormatError::BadOpcode {
+                    offset: at,
+                    opcode: STATIC,
+                });
+            }
+            Op::Static {
+                html,
+                flight,
+                text_start: flags & 1 != 0,
+                text_end: flags & 2 != 0,
+            }
+        }
+        TEXT => Op::Text,
+        NUMBER => Op::Number,
+        PROP => {
+            let name = ChunkId(r.u32()?);
+            let bad = FormatError::BadOpcode {
+                offset: at,
+                opcode: PROP,
+            };
+            let kind = Kind::from_byte(r.u8()?).ok_or(bad)?;
+            Op::Prop { name, kind }
+        }
+        ATTRIBUTES => {
+            let bad = FormatError::BadOpcode {
+                offset: at,
+                opcode: ATTRIBUTES,
+            };
+            let rules = ElementRules::from_byte(r.u8()?).ok_or(bad.clone())?;
+            let comma_after = match r.u8()? {
+                0 => false,
+                1 => true,
+                _ => return Err(bad),
+            };
+            Op::Attributes { rules, comma_after }
+        }
+        RAW_HTML => Op::RawHtml,
+        VALUE => Op::Value,
+        CHILD => Op::Child,
+        STYLE => Op::Style,
+        ISLAND => Op::Island,
+        LOOP => {
+            let end = OpIndex(r.u32()?);
+            let separator = r.u32()?.checked_sub(1).map(ChunkId);
+            Op::Loop { end, separator }
+        }
+        END_LOOP => Op::EndLoop,
+        IF => Op::If {
+            else_: OpIndex(r.u32()?),
+        },
+        JUMP => Op::Jump {
+            to: OpIndex(r.u32()?),
+        },
+        CALL => Op::Call {
+            template: TemplateId(r.u32()?),
+        },
+        opcode => return Err(FormatError::BadOpcode { offset: at, opcode }),
+    })
 }
 
 fn put_u32(out: &mut Vec<u8>, n: usize) -> Result<(), FormatError> {

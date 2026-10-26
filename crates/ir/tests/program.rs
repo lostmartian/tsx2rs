@@ -5,7 +5,9 @@
 
 use proptest::prelude::*;
 use tsx2rs_ir::attribute::{ElementRules, Kind};
-use tsx2rs_ir::{ChunkId, FormatError, MAGIC, Op, OpIndex, PROGRAM_FORMAT_VERSION, Program};
+use tsx2rs_ir::{
+    ChunkId, FormatError, MAGIC, Op, OpIndex, PROGRAM_FORMAT_VERSION, Program, TemplateId,
+};
 
 fn chunks(n: usize) -> Vec<Box<[u8]>> {
     (0..n)
@@ -51,6 +53,7 @@ fn accepts_a_program_with_every_op() {
         Op::Text,
         Op::Jump { to: OpIndex(17) },
         Op::Number,
+        call(0),
     ];
     let program = Program::new(chunks(3), ops.clone()).unwrap();
     assert_eq!(program.ops(), ops.as_slice());
@@ -189,7 +192,11 @@ fn rejects_programs_that_break_a_rule() {
         ),
     ];
     for (name, ops, expected) in cases {
-        assert_eq!(Program::new(chunks(1), ops), Err(expected), "{name}");
+        assert_eq!(
+            Program::new(chunks(1), ops),
+            Err(in_template(0, expected)),
+            "{name}"
+        );
     }
 }
 
@@ -216,6 +223,98 @@ fn a_branch_may_end_its_loop_body_or_skip_a_whole_loop() {
         Op::Text,
     ];
     assert!(Program::new(chunks(1), over_a_loop).is_ok());
+}
+
+fn in_template(template: u32, error: FormatError) -> FormatError {
+    FormatError::InTemplate {
+        template,
+        error: Box::new(error),
+    }
+}
+
+fn call(template: u32) -> Op {
+    Op::Call {
+        template: TemplateId(template),
+    }
+}
+
+#[test]
+fn templates_call_each_other_and_themselves() {
+    // A menu that renders its submenus: template 1 loops over items and calls itself.
+    let templates = vec![
+        vec![call(1)],
+        vec![
+            Op::Loop {
+                end: OpIndex(3),
+                separator: None,
+            },
+            Op::Text,
+            call(1),
+            Op::EndLoop,
+        ],
+    ];
+    let program = Program::with_templates(chunks(1), templates.clone()).unwrap();
+    assert_eq!(program.templates(), templates.as_slice());
+    assert_eq!(program.ops(), &[call(1)]);
+    assert_eq!(program.template(TemplateId(1)), templates[1].as_slice());
+}
+
+#[test]
+fn a_loop_body_may_read_through_a_call() {
+    let reads = vec![
+        vec![
+            Op::Loop {
+                end: OpIndex(2),
+                separator: None,
+            },
+            call(2),
+            Op::EndLoop,
+        ],
+        vec![Op::Text],
+        vec![call(1)], // reads through template 1
+    ];
+    assert!(Program::with_templates(chunks(1), reads).is_ok());
+    let reads_nothing = vec![
+        vec![
+            Op::Loop {
+                end: OpIndex(2),
+                separator: None,
+            },
+            call(1),
+            Op::EndLoop,
+        ],
+        vec![stat(0, 0), call(1)], // recursion that reads nothing
+    ];
+    assert_eq!(
+        Program::with_templates(chunks(1), reads_nothing),
+        Err(in_template(0, FormatError::LoopReadsNothing { op: 0 }))
+    );
+}
+
+#[test]
+fn rejects_missing_templates() {
+    assert_eq!(
+        Program::with_templates(chunks(1), vec![]),
+        Err(FormatError::NoTemplates)
+    );
+    assert_eq!(
+        Program::with_templates(chunks(1), vec![vec![], vec![Op::Text, call(2)]]),
+        Err(in_template(
+            1,
+            FormatError::TemplateOutOfRange { op: 1, template: 2 }
+        ))
+    );
+}
+
+#[test]
+fn encodes_and_decodes_templates() {
+    let program = Program::with_templates(
+        chunks(2),
+        vec![vec![stat(0, 1), call(1)], vec![], vec![Op::Text, call(2)]],
+    )
+    .unwrap();
+    let bytes = program.encode().unwrap();
+    assert_eq!(Program::decode(&bytes), Ok(program));
 }
 
 #[test]

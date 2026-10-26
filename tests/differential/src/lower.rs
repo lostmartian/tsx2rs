@@ -3,10 +3,10 @@
 //! is read from the input, so the engine (not this file) does all escaping, separating and
 //! attribute rules.
 
-use crate::tree::{Element, Tree, Value, json_string};
+use crate::tree::{Element, Link, Tree, Value, json_string};
 use tsx2rs_ir::attribute::{ElementRules, Prop, classify, is_custom_element};
 use tsx2rs_ir::input::{InputWriter, tag};
-use tsx2rs_ir::{ChunkId, FormatError, Op, Program};
+use tsx2rs_ir::{ChunkId, FormatError, Op, Program, TemplateId};
 
 /// A tree's program and the input that renders it.
 #[derive(Debug)]
@@ -23,10 +23,13 @@ pub struct Lowered {
 ///
 /// If the program fails validation (a bug in this lowering).
 pub fn lower(tree: &Tree) -> Result<Lowered, FormatError> {
-    let mut lowering = Lowering::default();
+    let mut lowering = Lowering {
+        templates: vec![Vec::new()],
+        ..Lowering::default()
+    };
     lowering.node(tree);
     Ok(Lowered {
-        program: Program::new(lowering.chunks, lowering.ops)?,
+        program: Program::with_templates(lowering.chunks, lowering.templates)?,
         input: lowering.input.finish(),
     })
 }
@@ -34,11 +37,40 @@ pub fn lower(tree: &Tree) -> Result<Lowered, FormatError> {
 #[derive(Default)]
 struct Lowering {
     chunks: Vec<Box<[u8]>>,
-    ops: Vec<Op>,
+    /// Every template; ops go to `current`.
+    templates: Vec<Vec<Op>>,
+    current: usize,
     input: InputWriter,
 }
 
 impl Lowering {
+    fn op(&mut self, op: Op) {
+        self.templates[self.current].push(op);
+    }
+
+    /// Lowers a compiled component's output `tree` as a new template (its input written in
+    /// place), and returns its id.
+    ///
+    /// React's Flight server wraps a component's root element in an array when the element has
+    /// a key and the component doesn't (`implicitSlot` in `renderElement`). The generated
+    /// components have no keys, so a keyed root element is wrapped; the runtime computes this
+    /// from the call chain, and the template writes it as plain Flight (ADR-0008).
+    fn template(&mut self, tree: &Tree) -> TemplateId {
+        let id = self.templates.len();
+        self.templates.push(Vec::new());
+        let caller = std::mem::replace(&mut self.current, id);
+        let wrap = matches!(tree, Tree::Element(e) if e.key.is_some());
+        if wrap {
+            self.markup("", "[");
+        }
+        self.node(tree);
+        if wrap {
+            self.markup("", "]");
+        }
+        self.current = caller;
+        TemplateId(u32::try_from(id).unwrap_or(u32::MAX))
+    }
+
     fn chunk(&mut self, s: &str) -> ChunkId {
         let index = self
             .chunks
@@ -54,7 +86,7 @@ impl Lowering {
     /// Static markup (never text at its edges).
     fn markup(&mut self, html: &str, flight: &str) {
         let (html, flight) = (self.chunk(html), self.chunk(flight));
-        self.ops.push(Op::Static {
+        self.op(Op::Static {
             html,
             flight,
             text_start: false,
@@ -65,11 +97,11 @@ impl Lowering {
     fn node(&mut self, tree: &Tree) {
         match tree {
             Tree::Text(s) => {
-                self.ops.push(Op::Text);
+                self.op(Op::Text);
                 self.input.string(s);
             }
             Tree::Number(n) => {
-                self.ops.push(Op::Number);
+                self.op(Op::Number);
                 self.input.number(*n);
             }
             Tree::Null => self.markup("", "null"),
@@ -78,7 +110,7 @@ impl Lowering {
             // A literal bigint: a static text node, as the compiler lowers `{12n}`.
             Tree::BigInt(digits) => {
                 let (html, flight) = (self.chunk(digits), self.chunk(&format!(r#""$n{digits}""#)));
-                self.ops.push(Op::Static {
+                self.op(Op::Static {
                     html,
                     flight,
                     text_start: true,
@@ -96,14 +128,24 @@ impl Lowering {
                 self.markup("", "]");
             }
             Tree::Hole(node) => {
-                self.ops.push(Op::Child);
+                self.op(Op::Child);
                 self.child_input(node);
             }
             Tree::Element(e) if e.runtime => {
-                self.ops.push(Op::Child);
+                self.op(Op::Child);
                 self.child_input(tree);
             }
             Tree::Element(e) => self.element(e),
+            Tree::Component(inner, Link::Call) => {
+                let at = self.templates[self.current].len();
+                self.op(Op::Child); // placeholder: the call goes here, before its template's ops
+                let template = self.template(inner);
+                self.templates[self.current][at] = Op::Call { template };
+            }
+            Tree::Component(_, Link::Hole) => {
+                self.op(Op::Child);
+                self.child_input(tree);
+            }
         }
     }
 
@@ -136,6 +178,13 @@ impl Lowering {
             }
             Tree::Hole(node) => self.child_input(node),
             Tree::Element(e) => self.element_input(e),
+            Tree::Component(inner, _) => {
+                // The template's index goes before its input, so reserve it: templates are
+                // numbered in creation order.
+                let id = self.templates.len();
+                self.input.tag(tag::TEMPLATE).count(id);
+                self.template(inner);
+            }
         }
     }
 
@@ -203,7 +252,7 @@ impl Lowering {
             &format!(r#"["$","{}",{key},{{"#, e.tag),
         );
         if e.spread {
-            self.ops.push(Op::Attributes {
+            self.op(Op::Attributes {
                 rules,
                 comma_after: has_children,
             });
@@ -221,11 +270,11 @@ impl Lowering {
                 match classify(name, rules) {
                     Prop::Attribute { name, kind } => {
                         let name = self.chunk(name);
-                        self.ops.push(Op::Prop { name, kind });
+                        self.op(Op::Prop { name, kind });
                     }
-                    Prop::Style => self.ops.push(Op::Style),
+                    Prop::Style => self.op(Op::Style),
                     Prop::Ignored | Prop::Content | Prop::Ref => {
-                        self.ops.push(Op::Value);
+                        self.op(Op::Value);
                     }
                 }
                 self.value(value);

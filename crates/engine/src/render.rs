@@ -7,7 +7,7 @@ use crate::{RenderError, flight, html, style};
 use element::Context;
 use tsx2rs_ir::attribute::{self, ElementRules, Kind, Prop};
 use tsx2rs_ir::input::{island, tag};
-use tsx2rs_ir::{ChunkId, Op, Program};
+use tsx2rs_ir::{ChunkId, Op, Program, TemplateId};
 
 /// The two outputs of a render. Reuse one `Output` across renders (after [`Output::clear`]) to
 /// avoid allocating per request.
@@ -34,7 +34,8 @@ impl Output {
     }
 }
 
-/// Generic values nest at most this deep (deeper input is rejected, not recursed into).
+/// Values, elements and template calls nest at most this deep together (deeper input is rejected,
+/// not recursed into).
 pub const MAX_VALUE_DEPTH: usize = 256;
 
 /// Runs `program` over `input`, appending to `output`.
@@ -44,8 +45,8 @@ pub const MAX_VALUE_DEPTH: usize = 256;
 ///
 /// # Errors
 ///
-/// If the input is truncated, has an invalid tag, condition or UTF-8 string, nests values
-/// deeper than [`MAX_VALUE_DEPTH`], or has bytes left over. `output` then holds a partial
+/// If the input is truncated, has an invalid tag, condition, template or UTF-8 string, nests
+/// values or calls deeper than [`MAX_VALUE_DEPTH`], or has bytes left over. `output` then holds a partial
 /// render and must be discarded.
 pub fn render(program: &Program, input: &[u8], output: &mut Output) -> Result<(), RenderError> {
     let mut input = Input::new(input);
@@ -53,9 +54,8 @@ pub fn render(program: &Program, input: &[u8], output: &mut Output) -> Result<()
         program,
         out: output,
         last_text: false,
-        loops: Vec::new(),
     };
-    renderer.run(&mut input)?;
+    renderer.run(program.ops(), &mut input, 0)?;
     if !input.is_empty() {
         return Err(RenderError::TrailingInput {
             offset: input.offset(),
@@ -70,7 +70,6 @@ struct Renderer<'p, 'o> {
     /// Whether the last thing written to HTML was a non-empty text node (React's
     /// `textEmbedded`): the next text node then needs a `<!-- -->` separator.
     last_text: bool,
-    loops: Vec<LoopFrame>,
 }
 
 struct LoopFrame {
@@ -79,9 +78,15 @@ struct LoopFrame {
     separator: Option<ChunkId>,
 }
 
-impl Renderer<'_, '_> {
-    fn run(&mut self, input: &mut Input<'_>) -> Result<(), RenderError> {
-        let ops = self.program.ops();
+impl<'p> Renderer<'p, '_> {
+    /// Runs one template's ops. Each run has its own loop stack, so a template can call itself.
+    fn run<'i>(
+        &mut self,
+        ops: &'p [Op],
+        input: &mut Input<'i>,
+        depth: usize,
+    ) -> Result<(), RenderError> {
+        let mut loops = Vec::new();
         let mut pc = 0;
         while let Some(&op) = ops.get(pc) {
             pc += 1;
@@ -128,27 +133,28 @@ impl Renderer<'_, '_> {
                 }
                 Op::Style => self.style(input, true)?,
                 Op::Value => self.value(input, 0)?,
-                Op::Child => self.child(input, 0, Context::BODY)?,
+                Op::Child => self.child(input, depth, Context::BODY)?,
                 Op::Island => self.island(input)?,
                 Op::Loop { end, separator } => {
                     let count = input.u32()?;
                     if count == 0 {
                         pc = end.0 as usize + 1;
                     } else {
-                        self.loops.push(LoopFrame {
+                        loops.push(LoopFrame {
                             body: pc,
                             remaining: count - 1,
                             separator,
                         });
                     }
                 }
-                Op::EndLoop => self.end_loop(&mut pc),
+                Op::EndLoop => self.end_loop(&mut loops, &mut pc),
                 Op::If { else_ } => {
                     if !input.condition()? {
                         pc = else_.0 as usize;
                     }
                 }
                 Op::Jump { to } => pc = to.0 as usize,
+                Op::Call { template } => self.call(template, input, depth, input.offset())?,
             }
         }
         Ok(())
@@ -278,13 +284,28 @@ impl Renderer<'_, '_> {
         Ok(())
     }
 
+    /// Runs a template where it's called, one level deeper.
+    fn call(
+        &mut self,
+        template: TemplateId,
+        input: &mut Input<'_>,
+        depth: usize,
+        offset: usize,
+    ) -> Result<(), RenderError> {
+        if depth >= MAX_VALUE_DEPTH {
+            return Err(RenderError::TooDeep { offset });
+        }
+        let program: &'p Program = self.program;
+        self.run(program.template(template), input, depth + 1)
+    }
+
     /// Runs the loop body again, or leaves the loop. Validation guarantees an open loop here.
-    fn end_loop(&mut self, pc: &mut usize) {
-        let Some(frame) = self.loops.last_mut() else {
+    fn end_loop(&mut self, loops: &mut Vec<LoopFrame>, pc: &mut usize) {
+        let Some(frame) = loops.last_mut() else {
             return;
         };
         if frame.remaining == 0 {
-            self.loops.pop();
+            loops.pop();
             return;
         }
         frame.remaining -= 1;
@@ -359,6 +380,16 @@ impl Renderer<'_, '_> {
                 self.out.flight.push(b']');
             }
             tag::ELEMENT => self.element(input, depth, context)?,
+            tag::TEMPLATE => {
+                let id = input.u32()?;
+                if id as usize >= self.program.templates().len() {
+                    return Err(RenderError::BadTemplate {
+                        offset,
+                        template: id,
+                    });
+                }
+                self.call(TemplateId(id), input, depth, offset)?;
+            }
             // React rejects any other object as a node, so the encoder never writes one.
             tag => return Err(RenderError::BadTag { offset, tag }),
         }
