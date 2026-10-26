@@ -12,5 +12,6 @@ Format: [MADR](https://adr.github.io/madr/)-style. Context → Decision → Cons
 | [0004](0004-engineering-standards.md) | Engineering standards: tooling, testing and git workflow | Accepted |
 | [0005](0005-compiling-server-components.md) | Rendering server components end to end: compiled templates, JavaScript values, React for the rest | Accepted |
 | [0006](0006-instruction-counts-for-pull-requests.md) | Judge pull requests' performance by instruction counts, measured in CI | Accepted |
+| [0007](0007-element-values.md) | Element values are a node kind that `Child` reads | Accepted |
 
 Background research (benchmarks, spikes, the full decision history before this repository existed) lives in the separate `tsx2rs-lab` repository.
