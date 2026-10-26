@@ -13,7 +13,7 @@
 
 ## Performance
 
-<!-- Hot-path change? Paste before/after numbers (criterion or bench/). Otherwise: "not on a hot path". -->
+<!-- Hot-path change? Summarize the "Benchmarks" job's instruction counts (CI) and justify any regression above 5%. Otherwise: "not on a hot path". -->
 
 ## Checklist
 

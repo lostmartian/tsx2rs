@@ -13,7 +13,7 @@ tsx2rs makes one promise: **output identical to Next.js, faster**. The tests are
 | 5 | **Identity vs Next.js** | For every fixture app: HTML (streams resolved) and decoded Flight tree identical to `next start`; correct fallback reasons | `tests/identity` harness | Every PR |
 | 6 | **Browser end-to-end** | Hydration with an empty console; interactions work; streamed boundaries reveal | Playwright | Every PR (Commerce), nightly (all) |
 | 7 | **Fuzzing** | The compiler and engine never panic or hang on arbitrary input | `cargo-fuzz` (libFuzzer) | Nightly |
-| 8 | **Performance** | No regressions; claims stay true | `criterion` (micro), `bench/` with oha (macro) | Every PR (micro, hot paths), before release (macro + cloud) |
+| 8 | **Performance** | No regressions; claims stay true | Gungraun instruction counts and `criterion` (micro), `bench/` with oha (macro) | Every PR (instruction counts, in CI), before release (macro + cloud) |
 | 9 | **Mutation** | The tests would catch real bugs in critical code | `cargo-mutants` on `engine` and `ir` | Weekly / before release |
 
 ## The two oracles
@@ -56,9 +56,11 @@ Coverage is a signal, not a goal. It finds untested code; it doesn't prove corre
 
 ## Performance
 
-- **Micro:** `criterion` benchmarks for the engine (static chunks, loops, escaping, Flight), the encoder, and compiler phases.
-  - A PR that touches a hot path posts before/after numbers.
-  - A regression above **5%** needs a justification in the PR.
+- **Micro, for pull requests: instruction counts** ([ADR-0006](../adr/0006-instruction-counts-for-pull-requests.md)).
+  - The engine's benchmark cases (`crates/engine/benches/cases/`) run under Valgrind's Callgrind through Gungraun (`benches/instructions.rs`).
+  - CI measures every pull request that touches Rust code against its base and puts the difference per benchmark in the job summary ("Benchmarks" workflow).
+  - Counts are deterministic, so every difference is real. A regression above **5%** of instructions needs a justification in the PR.
+- **Micro, wall-clock:** `criterion` runs the same cases (`benches/render.rs`) for absolute times and throughput. Laptop timings vary by ±10% or more between runs of the same code, so they don't decide whether a PR is slower.
 - **Macro:** `bench/` reproduces the Phase 0 setup.
   - `next start` vs the tsx2rs runtime on the Commerce app.
   - Interleaved runs, two passes in opposite order, ratios on laptops.
