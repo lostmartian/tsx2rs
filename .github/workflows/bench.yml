@@ -1,0 +1,93 @@
+name: Benchmarks
+
+# Instruction counts for the engine's hot paths (crates/engine/benches/instructions.rs), for every
+# pull request that touches Rust code: the base is measured, then the pull request, and the
+# difference per benchmark goes to the job summary. Counts are deterministic, so any difference
+# is real. The job reports; it doesn't gate merging (it isn't part of "CI OK").
+
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/bench.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash # -eo pipefail
+
+env:
+  CARGO_TERM_COLOR: never
+  # The base and the pull request build into one target directory, and Gungraun keeps the base's
+  # counts there to compare with.
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target
+  GUNGRAUN_HOME: ${{ github.workspace }}/target/gungraun
+  GUNGRAUN_COLOR: never
+
+jobs:
+  instructions:
+    name: Engine instruction counts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: instructions
+      - name: Find Gungraun's version
+        id: gungraun
+        # gungraun-runner must be the same version as the gungraun library in Cargo.lock.
+        run: |
+          version=$(awk '/^name = "gungraun"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: gungraun-runner@${{ steps.gungraun.outputs.version }}
+      - name: Install Valgrind
+        run: sudo apt-get update -q && sudo apt-get install -yq valgrind
+
+      - name: Count the base's instructions
+        id: base
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add -q "$RUNNER_TEMP/base" "$BASE"
+          if [ -f "$RUNNER_TEMP/base/crates/engine/benches/instructions.rs" ]; then
+            (cd "$RUNNER_TEMP/base" && cargo bench --locked -p tsx2rs_engine --bench instructions -- --save-baseline=base)
+            echo "measured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "measured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Count this pull request's instructions and compare
+        env:
+          MEASURED: ${{ steps.base.outputs.measured }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          args=()
+          if [ "$MEASURED" = true ]; then args=(--baseline=base); fi
+          cargo bench --locked -p tsx2rs_engine --bench instructions -- "${args[@]}" 2>&1 | tee "$RUNNER_TEMP/instructions.txt"
+          {
+            echo "## Engine instruction counts"
+            echo
+            if [ "$MEASURED" = true ]; then
+              echo "This pull request (merged into its base) compared with its base, \`${BASE:0:7}\`. Counts are deterministic: every difference is real."
+            else
+              echo "The base has no instruction benchmarks yet, so these are first counts with nothing to compare."
+            fi
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/instructions.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

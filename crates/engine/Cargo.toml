@@ -17,8 +17,16 @@ tsx2rs_ir.workspace = true
 criterion.workspace = true
 proptest.workspace = true
 
+# Valgrind runs only on Linux; elsewhere `instructions` is an empty benchmark.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun.workspace = true
+
 [[bench]]
 name = "render"
+harness = false
+
+[[bench]]
+name = "instructions"
 harness = false
 
 [lints]
