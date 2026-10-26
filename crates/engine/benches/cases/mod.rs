@@ -21,6 +21,7 @@ impl Case {
         Output {
             html: Vec::with_capacity(self.html_bytes),
             flight: Vec::with_capacity(self.flight_bytes),
+            ..Output::default()
         }
     }
 }

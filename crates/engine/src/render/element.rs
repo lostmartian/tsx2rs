@@ -9,6 +9,7 @@
 //! after `children` are written to Flight after the children, from a second cursor.
 
 use super::Renderer;
+use crate::head::Meta;
 use crate::input::{Input, Primitive};
 use crate::js::{self, BLOCKED_URL, is_javascript_url, is_nullish};
 use crate::{RenderError, flight, html};
@@ -228,15 +229,22 @@ struct Special<'i> {
     selected: Kept<'i>,
     /// The props that decide whether React hoists a `<title>`, `<meta>`, `<link>`, `<script>`
     /// or `<style>`, by [`HOIST_PROPS`] position.
-    hoist: [Kept<'i>; 9],
-    /// `src`, `srcSet`, `loading` and `fetchPriority` (`img`), for its preload.
-    image: [Kept<'i>; 4],
+    hoist: [Kept<'i>; 12],
+    /// The props of an `<img>` its preload depends on, by [`IMAGE_PROPS`] position.
+    image: [Kept<'i>; 9],
+    /// Where a `<link>`'s `precedence` and `data-precedence` attributes were written, as byte
+    /// ranges of the HTML output (a hoisted stylesheet rewrites them).
+    precedence_attribute: Option<(usize, usize)>,
+    data_precedence_attribute: Option<(usize, usize)>,
     /// `dangerouslySetInnerHTML`.
     inner_html: InnerHtml<'i>,
+    /// Which [`FLIGHT_HINT_PROPS`] are bigints (bit by position): React's Flight server fails on
+    /// a hint it can't serialize.
+    bigint_hint_props: u16,
 }
 
 /// The props React's hoisting decisions read (`pushStartInstance`), in [`Special::hoist`]'s order.
-const HOIST_PROPS: [&str; 9] = [
+const HOIST_PROPS: [&str; 12] = [
     "itemProp",
     "rel",
     "href",
@@ -246,6 +254,39 @@ const HOIST_PROPS: [&str; 9] = [
     "onError",
     "src",
     "async",
+    "charSet",
+    "name",
+    "type",
+];
+
+/// The props React's image preload reads (the `img` case of `pushStartInstance`), in
+/// [`Special::image`]'s order.
+const IMAGE_PROPS: [&str; 9] = [
+    "src",
+    "srcSet",
+    "loading",
+    "fetchPriority",
+    "sizes",
+    "crossOrigin",
+    "integrity",
+    "type",
+    "referrerPolicy",
+];
+
+/// The props React's Flight server copies into the resource hint it emits for an `<img>` or a
+/// `<link>` (`getChildFormatContext` in react-server 19.3.1), by [`Special::bigint_hint_props`]
+/// bit.
+const FLIGHT_HINT_PROPS: [&str; 10] = [
+    "as",
+    "crossOrigin",
+    "integrity",
+    "nonce",
+    "type",
+    "fetchPriority",
+    "referrerPolicy",
+    "imageSrcSet",
+    "imageSizes",
+    "media",
 ];
 
 /// An element's `dangerouslySetInnerHTML` prop.
@@ -296,6 +337,9 @@ impl<'i> Renderer<'_, '_> {
             }
         }
         self.out.flight.extend_from_slice(b",{");
+        // Where the element starts, and whether text came just before it: a hoisted element is
+        // moved out from here, leaving React's text separator.
+        let (start, text_before) = (self.out.html.len(), self.last_text);
         self.out.html.push(b'<');
         self.out.html.extend_from_slice(element.as_bytes());
 
@@ -336,8 +380,11 @@ impl<'i> Renderer<'_, '_> {
             }
             None => false,
         };
-        self.end_start_tag(kind, &state, *input, context, has_content, depth, offset)?;
+        let hoist =
+            self.end_start_tag(kind, &state, *input, context, has_content, depth, offset)?;
+        let written_content = self.out.html.len() - start;
         self.content(kind, &state, *input, has_content, depth, offset)?;
+        let content_range = (written_content, self.out.html.len() - start);
         self.last_text = false;
 
         if let Some((mut rest, after)) = children {
@@ -361,7 +408,129 @@ impl<'i> Renderer<'_, '_> {
             self.out.html.extend_from_slice(element.as_bytes());
             self.out.html.push(b'>');
         }
+        if hoist {
+            let written = self.out.html.split_off(start);
+            self.hoist(kind, &state, &written, start, content_range);
+            // React leaves a text separator where it hoisted anything but a `<title>`.
+            if text_before && kind != Kind::Title {
+                self.out.html.extend_from_slice(html::TEXT_SEPARATOR);
+            }
+        }
         self.last_text = false;
+        Ok(())
+    }
+
+    /// A hoisted `<style>` whose `href` the `<head>` already has: React skips it entirely.
+    fn duplicate_style(&self, kind: Kind, hoist: bool, state: &Special<'i>) -> bool {
+        hoist
+            && kind == Kind::StyleElement
+            && matches!(state.hoist[2].primitive(), Some(Primitive::String(href)) if self.out.head.has_style(href))
+    }
+
+    /// Moves a hoisted element, as written at `start`, into the `<head>` queue React puts it in
+    /// (the hoisting cases of `pushStartInstance`). `content_range` is its content's byte range
+    /// in `written`.
+    fn hoist(
+        &mut self,
+        kind: Kind,
+        state: &Special<'i>,
+        written: &[u8],
+        start: usize,
+        content_range: (usize, usize),
+    ) {
+        let [_, rel, href, precedence, .., char_set, name, kind_of_script] =
+            state.hoist.map(Kept::primitive);
+        let string = |value: Option<Primitive<'i>>| match value {
+            Some(Primitive::String(s)) => s,
+            _ => "",
+        };
+        let head = &mut self.out.head;
+        match kind {
+            Kind::Meta => head.meta(
+                written,
+                if matches!(char_set, Some(Primitive::String(_))) {
+                    Meta::Charset
+                } else if string(name) == "viewport" {
+                    Meta::Viewport
+                } else {
+                    Meta::Other
+                },
+            ),
+            Kind::Link if string(rel) == "stylesheet" => {
+                let sheet = stylesheet(
+                    written,
+                    start,
+                    string(precedence),
+                    state.precedence_attribute,
+                    state.data_precedence_attribute,
+                );
+                head.stylesheet(&sheet, string(precedence), string(href));
+            }
+            Kind::Script => head.script(written, string(state.hoist[7].primitive()), {
+                string(kind_of_script) == "module"
+            }),
+            Kind::StyleElement => head.style_rules(
+                written
+                    .get(content_range.0..content_range.1)
+                    .unwrap_or_default(),
+                string(precedence),
+                string(href),
+            ),
+            _ => head.hoistable(written),
+        }
+    }
+
+    /// An `<img>`'s preload link (`pushLinkImpl` with the props React builds in the `img` case
+    /// of `pushStartInstance`), queued in the `<head>`.
+    fn image_preload(&mut self, image: &[Kept<'i>; 9], offset: usize) -> Result<(), RenderError> {
+        let [
+            src,
+            src_set,
+            _,
+            fetch_priority,
+            sizes,
+            cross_origin,
+            integrity,
+            kind,
+            referrer_policy,
+        ] = image.map(Kept::primitive);
+        let string = |value: Option<Primitive<'i>>| match value {
+            Some(Primitive::String(s)) => Some(s),
+            _ => None,
+        };
+        let src_set_text = string(src_set).filter(|s| !s.is_empty());
+        let sizes = string(sizes);
+        let key = match src_set_text {
+            Some(set) => format!("{set}\n{}", sizes.unwrap_or_default()),
+            None => string(src).unwrap_or_default().to_owned(),
+        };
+        // `crossOrigin` is `"use-credentials"`, `""` for any other string, or absent.
+        let cross_origin = string(cross_origin)
+            .map(|s| Primitive::String(if s == "use-credentials" { s } else { "" }));
+        let props = [
+            ("href", if src_set_text.is_some() { None } else { src }),
+            ("imageSrcSet", src_set),
+            ("imageSizes", sizes.map(Primitive::String)),
+            ("crossOrigin", cross_origin),
+            ("integrity", integrity),
+            ("type", kind),
+            ("fetchPriority", fetch_priority),
+            ("referrerPolicy", referrer_policy),
+        ];
+        let mut link = b"<link rel=\"preload\" as=\"image\"".to_vec();
+        for (name, value) in props {
+            if let Some(value) = value {
+                let class = attribute::classify(name, ElementRules::Generic);
+                let Prop::Attribute { name, kind } = class else {
+                    continue;
+                };
+                html::attribute(&mut link, name.as_bytes(), kind, value)
+                    .map_err(|_| RenderError::InvalidValue { offset })?;
+            }
+        }
+        link.extend_from_slice(b"/>");
+        let high = matches!(fetch_priority, Some(Primitive::String("high")));
+        self.out.head.image_preload(&link, &key, high);
         Ok(())
     }
 
@@ -485,6 +654,12 @@ impl<'i> Renderer<'_, '_> {
         if flight {
             flight::primitive(&mut self.out.flight, value);
         }
+        if matches!(kind, Kind::Img | Kind::Link)
+            && matches!(value, Primitive::BigInt(_))
+            && let Some(bit) = FLIGHT_HINT_PROPS.iter().position(|&p| p == name)
+        {
+            state.bigint_hint_props |= 1 << bit;
+        }
         let kept = if is_nullish(value) {
             Kept::Absent
         } else {
@@ -512,13 +687,21 @@ impl<'i> Renderer<'_, '_> {
                             state.hoist[at] = kept;
                         }
                     }
-                    (Kind::Img, "src") => state.image[0] = kept,
-                    (Kind::Img, "srcSet") => state.image[1] = kept,
-                    (Kind::Img, "loading") => state.image[2] = kept,
-                    (Kind::Img, "fetchPriority") => state.image[3] = kept,
+                    (Kind::Img, _) => {
+                        if let Some(at) = IMAGE_PROPS.iter().position(|&p| p == name) {
+                            state.image[at] = kept;
+                        }
+                    }
                     _ => {}
                 }
+                let before = self.out.html.len();
                 self.attribute(class, value, offset)?;
+                let range = Some((before, self.out.html.len()));
+                match (kind, name) {
+                    (Kind::Link, "precedence") => state.precedence_attribute = range,
+                    (Kind::Link, "data-precedence") => state.data_precedence_attribute = range,
+                    _ => {}
+                }
             }
         }
         Ok(())
@@ -556,7 +739,8 @@ impl<'i> Renderer<'_, '_> {
         has_content: bool,
         depth: usize,
         offset: usize,
-    ) -> Result<(), RenderError> {
+    ) -> Result<bool, RenderError> {
+        let mut hoist = false;
         for (&name, kept) in kind.deferred().iter().zip(state.deferred) {
             if let Some(value) = kept.primitive() {
                 let class = attribute::classify(name, ElementRules::Generic);
@@ -598,14 +782,17 @@ impl<'i> Renderer<'_, '_> {
                     html::empty_attribute(&mut self.out.html, b"selected");
                 }
             }
-            Kind::Img if !context.noscript && !context.picture && preloads(&state.image) => {
-                return Err(RenderError::UnsupportedElement { offset });
+            Kind::Img | Kind::Link if flight_hint_fails(kind, state, context) => {
+                // `JSON.stringify` throws on the bigint, so React's Flight server turns the
+                // element into an error.
+                return Err(RenderError::InvalidValue { offset });
             }
-            // Hoisted into `<head>`, or a resource: the hoistables pull request.
-            Kind::Title | Kind::Meta | Kind::Link | Kind::Script | Kind::StyleElement
-                if hoisted(kind, &state.hoist, context) =>
-            {
-                return Err(RenderError::UnsupportedElement { offset });
+            Kind::Img if !context.noscript && !context.picture && preloads(&state.image) => {
+                self.image_preload(&state.image, offset)?;
+            }
+            // Written here, then moved into the `<head>` queues once complete (ADR-0010).
+            Kind::Title | Kind::Meta | Kind::Link | Kind::Script | Kind::StyleElement => {
+                hoist = hoisted(kind, &state.hoist, context);
             }
             _ => {}
         }
@@ -614,14 +801,18 @@ impl<'i> Renderer<'_, '_> {
                 // "… must neither have `children` nor use `dangerouslySetInnerHTML`."
                 return Err(RenderError::InvalidValue { offset });
             }
-        } else if has_content && state.inner_html.is_set() {
-            // "Can only set one of `children` or `props.dangerouslySetInnerHTML`."
+        } else if has_content
+            && state.inner_html.is_set()
+            && !self.duplicate_style(kind, hoist, state)
+        {
+            // "Can only set one of `children` or `props.dangerouslySetInnerHTML`." (React skips
+            // a `<style>` resource whose `href` it has seen, without looking at its content.)
             return Err(RenderError::InvalidValue { offset });
         }
         self.out
             .html
             .extend_from_slice(if kind.self_closing() { b"/>" } else { b">" });
-        Ok(())
+        Ok(hoist)
     }
 
     /// Content the element writes itself, before its children: `dangerouslySetInnerHTML`, a
@@ -832,10 +1023,94 @@ impl<'i> Renderer<'_, '_> {
     }
 }
 
+/// Whether React's Flight server emits a resource hint for this `<img>` or `<link>` with a
+/// bigint in it, which it can't serialize (`getChildFormatContext` in react-server 19.3.1).
+fn flight_hint_fails(kind: Kind, state: &Special<'_>, context: Context<'_>) -> bool {
+    let has_bigint = |names: &[&str]| {
+        names.iter().any(|name| {
+            FLIGHT_HINT_PROPS
+                .iter()
+                .position(|p| p == name)
+                .is_some_and(|bit| state.bigint_hint_props & (1 << bit) != 0)
+        })
+    };
+    match kind {
+        Kind::Img => {
+            !context.noscript
+                && !context.picture
+                && preloads(&state.image)
+                && has_bigint(&["integrity", "type", "fetchPriority", "referrerPolicy"])
+        }
+        Kind::Link => {
+            let [item_prop, rel, href, ..] = state.hoist.map(Kept::primitive);
+            let (Some(Primitive::String(rel)), Some(Primitive::String(href))) = (rel, href) else {
+                return false;
+            };
+            if context.noscript || item_prop.is_some() || href.is_empty() {
+                return false;
+            }
+            match rel {
+                "preload" => has_bigint(&FLIGHT_HINT_PROPS),
+                "modulepreload" => has_bigint(&["as", "crossOrigin", "integrity", "nonce"]),
+                "stylesheet" => has_bigint(&[
+                    "crossOrigin",
+                    "integrity",
+                    "nonce",
+                    "type",
+                    "fetchPriority",
+                    "referrerPolicy",
+                    "media",
+                ]),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// A hoisted stylesheet `<link>`: written with its props in order, `precedence` left out, and
+/// `data-precedence` set to it (React's `assign({}, props, {"data-precedence": precedence,
+/// precedence: null})`), so in the place of a `data-precedence` prop or else last.
+fn stylesheet(
+    written: &[u8],
+    start: usize,
+    precedence: &str,
+    precedence_attribute: Option<(usize, usize)>,
+    data_precedence_attribute: Option<(usize, usize)>,
+) -> Vec<u8> {
+    let mut data_precedence = Vec::new();
+    html::attribute_start(&mut data_precedence, b"data-precedence");
+    html::escape(&mut data_precedence, precedence);
+    data_precedence.push(b'"');
+    let relative = |range: Option<(usize, usize)>| range.map(|(a, b)| (a - start, b - start));
+    let precedence_range = relative(precedence_attribute);
+    let data_range = relative(data_precedence_attribute);
+    // The tag ends with `/>`; `data-precedence` goes before it unless a prop had it.
+    let end = written.len().saturating_sub(2);
+    let mut sheet = Vec::with_capacity(written.len() + data_precedence.len());
+    let mut at = 0;
+    let mut cuts: Vec<((usize, usize), &[u8])> = Vec::new();
+    if let Some(range) = precedence_range {
+        cuts.push((range, b""));
+    }
+    match data_range {
+        Some(range) => cuts.push((range, &data_precedence)),
+        None => cuts.push(((end, end), &data_precedence)),
+    }
+    cuts.sort_by_key(|(range, _)| range.0);
+    for ((from, to), replacement) in cuts {
+        sheet.extend_from_slice(written.get(at..from).unwrap_or_default());
+        sheet.extend_from_slice(replacement);
+        at = to;
+    }
+    sheet.extend_from_slice(written.get(at..).unwrap_or_default());
+    sheet
+}
+
 /// Whether React hoists this `<title>`, `<meta>`, `<link>`, `<script>` or `<style>` instead of
 /// writing it in place (`pushStartInstance`): never inside `<svg>` or `<noscript>`, or with an
 /// `itemProp`; otherwise by its props.
-fn hoisted(kind: Kind, hoist: &[Kept<'_>; 9], context: Context<'_>) -> bool {
+fn hoisted(kind: Kind, hoist: &[Kept<'_>; 12], context: Context<'_>) -> bool {
     fn string(value: Option<Primitive<'_>>) -> Option<&str> {
         match value {
             Some(Primitive::String(s)) => Some(s),
@@ -852,6 +1127,7 @@ fn hoisted(kind: Kind, hoist: &[Kept<'_>; 9], context: Context<'_>) -> bool {
         on_error,
         src,
         async_,
+        ..,
     ] = hoist.map(Kept::primitive);
     if context.keeps_hoistables() || item_prop.is_some() {
         return false;
@@ -911,13 +1187,12 @@ fn is_valid_tag(element: &str) -> bool {
 
 /// Whether React would preload this `<img>` (the `img` case of `pushStartInstance`), from its
 /// `src`, `srcSet`, `loading` and `fetchPriority`.
-fn preloads(image: &[Kept<'_>; 4]) -> bool {
-    let [src, src_set, loading, fetch_priority] = image.map(Kept::primitive);
+fn preloads(image: &[Kept<'_>; 9]) -> bool {
+    let [src, src_set, loading, fetch_priority, ..] = image.map(Kept::primitive);
     let is = |value: Option<Primitive<'_>>, expected: &str| matches!(value, Some(Primitive::String(s)) if s == expected);
     if is(loading, "lazy") || is(fetch_priority, "low") {
         return false;
     }
-    // `src` and `srcSet` must each be a string or absent, and one of them non-empty.
     // `src` and `srcSet` must each be a string or absent (as `""` here), and one of them
     // non-empty.
     let url = |value| match value {

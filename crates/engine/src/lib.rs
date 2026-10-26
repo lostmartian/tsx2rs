@@ -8,6 +8,7 @@
 #![deny(missing_docs)]
 
 mod flight;
+mod head;
 mod html;
 mod input;
 mod js;
@@ -15,6 +16,7 @@ mod render;
 mod script;
 mod style;
 
+pub use head::Head;
 pub use render::{MAX_VALUE_DEPTH, Output, render};
 pub use script::script_string;
 
