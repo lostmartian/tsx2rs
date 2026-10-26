@@ -12,7 +12,9 @@ step "Rust: doc tests";     cargo test --workspace --doc --locked
 step "Rust: docs";          RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 step "Rust: dependencies";  cargo deny --locked check
 step "Native binding";      pnpm build:native
-step "TypeScript: types";   pnpm typecheck && pnpm exec tsc -p tsconfig.json
+# One command per line: `set -e` ignores a failure on the left of `&&`.
+step "TypeScript: types";   pnpm typecheck
+step "TypeScript: root";    pnpm exec tsc -p tsconfig.json
 step "TypeScript: lint";    pnpm lint
 step "Format";              pnpm format:check
 step "TypeScript: tests";   pnpm test
