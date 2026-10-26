@@ -13,7 +13,20 @@
 //! | [`Op::Loop`](crate::Op::Loop) | `u32` LE count |
 //! | [`Op::Island`](crate::Op::Island) | string (React's HTML), then a flags byte ([`island::TEXT_START`], [`island::TEXT_END`]) |
 //! | [`Op::Value`](crate::Op::Value) | a tagged value: any [`tag`], arrays as `u32` count + values, objects as `u32` count + (string key, value) pairs |
-//! | [`Op::Child`](crate::Op::Child) | a tagged node: [`tag::UNDEFINED`], [`tag::NULL`], [`tag::FALSE`], [`tag::TRUE`], [`tag::NUMBER`], [`tag::STRING`], [`tag::BIGINT`], or [`tag::ARRAY`] with `u32` count + nodes |
+//! | [`Op::Child`](crate::Op::Child) | a tagged node: [`tag::UNDEFINED`], [`tag::NULL`], [`tag::FALSE`], [`tag::TRUE`], [`tag::NUMBER`], [`tag::STRING`], [`tag::BIGINT`], [`tag::ARRAY`] with `u32` count + nodes, or [`tag::ELEMENT`] (below) |
+//!
+//! An element node (ADR-0007) is a host element, its props in the props object's order:
+//!
+//! ```text
+//! ELEMENT, type (string), key (tag::NULL, or tag::STRING + string),
+//! u32 count, count × (name (string), value), then the children node if there is one
+//! ```
+//!
+//! The entry named `children` has no value: it marks where `children` is among the props, and
+//! the node follows the last entry. The other values are tagged: a primitive for attributes, a
+//! style value for `style`, an object whose `__html` is a primitive for
+//! `dangerouslySetInnerHTML`, and a primitive or an array of primitives for a `<select>`'s
+//! `value` and `defaultValue`.
 
 /// Tags for optional and generic values.
 pub mod tag {
@@ -35,6 +48,8 @@ pub mod tag {
     pub const OBJECT: u8 = 7;
     /// A bigint (a string follows: its decimal digits, as `String(value)` writes them).
     pub const BIGINT: u8 = 8;
+    /// A host element (a node; its type, key and props follow, see the [module docs](super)).
+    pub const ELEMENT: u8 = 9;
 }
 
 /// Flags for [`Op::Island`](crate::Op::Island): the island's HTML begins / ends with text.
