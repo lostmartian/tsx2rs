@@ -8,8 +8,10 @@
  *   node oracle.ts html
  *     request: {"tree", "engineHtml", "engineFlight", "reactPayload"}
  *     response: {"ok": true} or {"ok": false, "html"?: difference, "flight"?: difference}
- *     request: {"tree"}  (the engine returned an error)
+ *     request: {"tree", "document"?: true}  (the engine returned an error)
  *     response: {"reactHtml": string} or {"reactThrew": message}
+ *     With "document", the tree is rendered as the body of <html><head></head><body>, so what
+ *     React hoists shows up in <head>.
  *
  * In html mode the oracle is also the judge: React DOM's HTML must equal the engine's byte for
  * byte, and React Flight's payload must decode to the same tree as the engine's Flight value
@@ -125,6 +127,7 @@ interface JudgeRequest {
   engineHtml?: string;
   engineFlight?: string;
   reactPayload?: string;
+  document?: boolean;
 }
 
 async function judge(request: JudgeRequest): Promise<Record<string, unknown>> {
@@ -134,7 +137,17 @@ async function judge(request: JudgeRequest): Promise<Record<string, unknown>> {
   };
   let reactHtml: string;
   try {
-    reactHtml = renderToString(toElement(react, request.tree));
+    const root = toElement(react, request.tree);
+    reactHtml = renderToString(
+      request.document === true
+        ? react.createElement(
+            "html",
+            null,
+            react.createElement("head", null),
+            react.createElement("body", null, root),
+          )
+        : root,
+    );
   } catch (e) {
     const reactThrew = e instanceof Error ? e.message : String(e);
     return request.engineHtml === undefined ? { reactThrew } : { ok: false, reactThrew };

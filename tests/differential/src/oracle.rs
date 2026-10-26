@@ -119,15 +119,20 @@ impl Oracle {
     }
 
     /// What React DOM's server does with `tree`, for a tree the engine returned an error for:
-    /// `Ok` with its HTML (as a JSON string literal), or `Err` with the message it threw.
+    /// `Ok` with its HTML (as a JSON string literal), or `Err` with the message it threw. With
+    /// `document`, the tree is rendered as the body of a document, so what React hoists shows
+    /// up in its `<head>`.
     ///
     /// # Errors
     ///
     /// An I/O error talking to the oracle, or a response it doesn't understand.
-    pub fn react_html(&mut self, tree: &Tree) -> std::io::Result<Result<String, String>> {
-        let response = self
-            .html
-            .ask(&format!(r#"{{"tree":{}}}"#, tree.to_json()))?;
+    pub fn react_html(
+        &mut self,
+        tree: &Tree,
+        document: bool,
+    ) -> std::io::Result<Result<String, String>> {
+        let request = format!(r#"{{"tree":{},"document":{document}}}"#, tree.to_json());
+        let response = self.html.ask(&request)?;
         let field = |name: &str| {
             response
                 .strip_prefix(&format!(r#"{{"{name}":"#))

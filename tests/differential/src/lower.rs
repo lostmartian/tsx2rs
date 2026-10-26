@@ -131,7 +131,9 @@ impl Lowering {
                 self.op(Op::Child);
                 self.child_input(node);
             }
-            Tree::Element(e) if e.runtime => {
+            // A `Child` hole starts in the body's context (ADR-0009), so the compiler lowers an
+            // `<svg>` with anything known only at runtime inside as an element value.
+            Tree::Element(e) if e.runtime || (e.tag == "svg" && has_runtime_part(tree)) => {
                 self.op(Op::Child);
                 self.child_input(tree);
             }
@@ -346,5 +348,16 @@ impl Lowering {
                 self.value(inner);
             }
         }
+    }
+}
+
+/// Whether the tree holds anything known only at runtime: a hole, an element value or a compiled
+/// component.
+fn has_runtime_part(tree: &Tree) -> bool {
+    match tree {
+        Tree::Hole(_) | Tree::Component(..) => true,
+        Tree::Element(e) => e.runtime || e.children.iter().any(has_runtime_part),
+        Tree::Array(nodes) => nodes.iter().any(has_runtime_part),
+        _ => false,
     }
 }
