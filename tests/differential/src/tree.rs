@@ -824,11 +824,14 @@ fn generic_element(
 /// which React rejects.
 fn special_element(children: BoxedStrategy<Vec<Tree>>) -> impl Strategy<Value = Tree> {
     prop::sample::select(SPECIAL_TAGS).prop_flat_map(move |tag| {
-        let void = matches!(
-            tag,
-            "input" | "img" | "source" | "menuitem" | "meta" | "link"
-        );
-        let children = if void {
+        // `<meta>` and `<link>` get no children: with children, a hoisted stylesheet makes
+        // React write a broken document instead of throwing (the engine rejects it; unit
+        // tests cover in-place `<link>` children).
+        let void = matches!(tag, "input" | "img" | "source" | "menuitem");
+        let childless = matches!(tag, "meta" | "link");
+        let children = if childless {
+            Just(vec![]).boxed()
+        } else if void {
             prop_oneof![9 => Just(vec![]), 1 => children.clone()].boxed()
         } else {
             children.clone()
@@ -1010,6 +1013,63 @@ fn document_elements(inner: BoxedStrategy<Tree>) -> impl Strategy<Value = Tree> 
     })
 }
 
+/// A gallery of 9 to 16 images with distinct sources (and one repeated), some lazy, some
+/// `data:`, some high priority, and an `async` script: React preloads the first ten and the
+/// high-priority ones before the script in `<head>`, and the rest after it.
+fn image_gallery() -> impl Strategy<Value = Tree> {
+    let image = (
+        prop_oneof![9 => Just(""), 1 => Just("lazy")],
+        prop_oneof![8 => Just(""), 1 => Just("high"), 1 => Just("low")],
+        prop::bool::weighted(0.05),
+    );
+    prop::collection::vec(image, 9..17).prop_map(|images| {
+        let element = |tag, props, children| {
+            Tree::Element(Element {
+                tag,
+                key: None,
+                props,
+                spread: false,
+                runtime: true,
+                children_at: None,
+                children,
+            })
+        };
+        let mut children: Vec<Tree> = images
+            .into_iter()
+            .enumerate()
+            .map(|(i, (loading, priority, data))| {
+                let src = if data {
+                    format!("data:{i}")
+                } else {
+                    format!("/i{i}.png")
+                };
+                let mut props = vec![("src".to_owned(), Value::String(src))];
+                for (name, value) in [("loading", loading), ("fetchPriority", priority)] {
+                    if !value.is_empty() {
+                        props.push((name.to_owned(), Value::String(value.to_owned())));
+                    }
+                }
+                element("img", props, vec![])
+            })
+            .collect();
+        children.push(element(
+            "img",
+            vec![("src".to_owned(), Value::String("/i0.png".to_owned()))],
+            vec![],
+        ));
+        // An `async` script: written between the high-priority and the bulk preloads.
+        children.push(element(
+            "script",
+            vec![
+                ("src".to_owned(), Value::String("/a.js".to_owned())),
+                ("async".to_owned(), Value::Bool(true)),
+            ],
+            vec![],
+        ));
+        element("div", vec![], children)
+    })
+}
+
 /// `<pre>`, `<listing>` or `<textarea>` with one text child that may start with a newline, which
 /// React doubles.
 fn leading_newline() -> impl Strategy<Value = Tree> {
@@ -1077,6 +1137,7 @@ pub fn tree() -> impl Strategy<Value = Tree> {
             1 => select(inner.clone()),
             1 => image_in_scope(),
             1 => leading_newline(),
+            1 => image_gallery(),
             2 => hoistable_in_scope(),
             1 => document_elements(inner.clone()),
             1 => (inner.clone(), prop_oneof![Just(Link::Call), Just(Link::Hole)])

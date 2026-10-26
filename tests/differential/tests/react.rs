@@ -31,6 +31,12 @@ fn check(tree: &Tree) -> Result<(), String> {
             (RenderError::InvalidValue { .. } | RenderError::UnsupportedElement { .. }, Err(_)) => {
                 true
             }
+            // React's Flight server failed on it (an error row, `N:E{…}`, as a JSON string).
+            (RenderError::InvalidValue { .. }, Ok(_))
+                if oracle.react_flight(tree).map_err(io)?.contains(":E{") =>
+            {
+                true
+            }
             // A compiled component where React only turns it into a string.
             (RenderError::UnsupportedElement { .. }, Ok(_)) if tree.has_component_as_text() => true,
             // Something React hoists: in a document, it shows up in `<head>`.
@@ -50,7 +56,14 @@ fn check(tree: &Tree) -> Result<(), String> {
             ))
         };
     }
-    let html = String::from_utf8(output.html).map_err(|e| e.to_string())?;
+    // The whole document, as React writes `<html><head></head><body>{tree}</body></html>`.
+    let mut head = Vec::new();
+    output.head.write(&mut head);
+    let html = format!(
+        "<html><head>{}</head><body>{}</body></html>",
+        String::from_utf8(head).map_err(|e| e.to_string())?,
+        String::from_utf8(output.html).map_err(|e| e.to_string())?
+    );
     let flight = String::from_utf8(output.flight).map_err(|e| e.to_string())?;
     match oracle.compare(tree, &html, &flight) {
         Ok(()) => Ok(()),

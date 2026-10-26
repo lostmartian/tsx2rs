@@ -84,7 +84,9 @@ impl Oracle {
         })
     }
 
-    /// Renders `tree` with React and compares React's HTML and Flight with the engine's.
+    /// Renders `tree` with React and compares React's HTML and Flight with the engine's. The
+    /// HTML is a whole document: `tree` is the body of `<html><head></head><body>`, so the
+    /// engine's `engine_html` has its hoisted `<head>` content too.
     ///
     /// # Errors
     ///
@@ -109,13 +111,29 @@ impl Oracle {
         json_string(&mut request, engine_html);
         request.push_str(r#","engineFlight":"#);
         json_string(&mut request, engine_flight);
-        let _ = write!(request, r#","reactPayload":{payload}}}"#);
+        let _ = write!(request, r#","reactPayload":{payload},"document":true}}"#);
         let verdict = self.html.ask(&request).map_err(Err)?;
         if verdict == r#"{"ok":true}"# {
             Ok(())
         } else {
             Err(Ok(Mismatch(verdict)))
         }
+    }
+
+    /// React's Flight payload for `tree`.
+    ///
+    /// # Errors
+    ///
+    /// An I/O error talking to the oracle, or a response it doesn't understand.
+    pub fn react_flight(&mut self, tree: &Tree) -> std::io::Result<String> {
+        let response = self
+            .flight
+            .ask(&format!(r#"{{"tree":{}}}"#, tree.to_json()))?;
+        response
+            .strip_prefix(r#"{"payload":"#)
+            .and_then(|rest| rest.strip_suffix('}'))
+            .map(str::to_owned)
+            .ok_or_else(|| std::io::Error::other(response))
     }
 
     /// What React DOM's server does with `tree`, for a tree the engine returned an error for:

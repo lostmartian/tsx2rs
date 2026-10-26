@@ -2,6 +2,7 @@
 
 mod element;
 
+use crate::head::Head;
 use crate::input::{Input, Primitive};
 use crate::{RenderError, flight, html, style};
 use element::Context;
@@ -9,7 +10,7 @@ use tsx2rs_ir::attribute::{self, ElementRules, Kind, Prop};
 use tsx2rs_ir::input::{island, tag};
 use tsx2rs_ir::{ChunkId, Op, Program, TemplateId};
 
-/// The two outputs of a render. Reuse one `Output` across renders (after [`Output::clear`]) to
+/// The outputs of a render. Reuse one `Output` across renders (after [`Output::clear`]) to
 /// avoid allocating per request.
 #[derive(Debug, Default)]
 pub struct Output {
@@ -18,6 +19,9 @@ pub struct Output {
     /// The Flight (RSC) payload text for the rendered template, not yet split into rows or
     /// escaped for a `<script>` (see [`crate::script_string`]).
     pub flight: Vec<u8>,
+    /// What React DOM hoists into the document's `<head>` (ADR-0010). It accumulates across
+    /// renders for one request, with React's deduplication.
+    pub head: Head,
 }
 
 impl Output {
@@ -27,10 +31,11 @@ impl Output {
         Self::default()
     }
 
-    /// Empties both outputs, keeping their capacity.
+    /// Empties the outputs, keeping their capacity: the start of a new request.
     pub fn clear(&mut self) {
         self.html.clear();
         self.flight.clear();
+        self.head.clear();
     }
 }
 

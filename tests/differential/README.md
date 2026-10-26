@@ -9,7 +9,7 @@ Layer 4 of the [testing strategy](../../docs/engineering/testing.md): **React is
 - **Errors:** where React DOM throws (content on a void element, `children` with `dangerouslySetInnerHTML`, a `<textarea>` with a value and children, …), the engine must return an error too. Where the engine declines an element it doesn't render yet (one React hoists, or an `<img>` it preloads), React must have hoisted something: rendered as the body of a document, its `<head>` isn't empty. The property test runs on a thread with a large stack, because shrinking a failure through these generators recurses deeply.
 - **Lower:** each tree becomes a template program the way the compiler will lower host elements (`src/lower.rs`). Element structure becomes static chunks, and every value is read from the input, so the engine does all escaping and separating.
 - **Render twice:** the engine renders the program. The same tree goes to `oracle/oracle.ts`, which renders it with **React DOM's server** (`renderToString`) and **React's Flight server** (`react-server-dom-webpack`, under the `react-server` condition).
-- **Compare:** the HTML must be byte-identical, and the Flight must decode to the same tree (with the identity harness). A mismatch is shrunk to a minimal tree.
+- **Compare:** every tree is the body of a document (`<html><head></head><body>`) on both sides, and the whole document must be byte-identical (so hoisting into `<head>`, its order and deduplication are checked too), and the Flight must decode to the same tree (with the identity harness). A mismatch is shrunk to a minimal tree.
 
 ## Running
 
@@ -25,5 +25,5 @@ CI runs 2,000 trees per PR in the "Differential (engine vs React)" job. The othe
 
 These have React rules of their own, and each needs its own generator and engine support before the compiler may emit it:
 
-- **Hoisting:** the hoisted forms of `title`, `meta`, `link`, `script`, `style`, and `img` preloads (the engine declines them until the hoisting PR).
 - **Fragments, Suspense boundaries,** and client components (islands).
+- **Flight hint rows** (`:HL`, `:Hm`): React's Flight server emits them for images it preloads and for stylesheet, preload and modulepreload links. The engine doesn't yet, so they aren't compared (ADR-0010).

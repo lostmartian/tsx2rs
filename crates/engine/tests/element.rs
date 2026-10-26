@@ -128,17 +128,6 @@ fn invalid(node: &V) {
     );
 }
 
-fn unsupported(node: &V) {
-    assert!(
-        matches!(
-            render_node(node),
-            Err(RenderError::UnsupportedElement { .. })
-        ),
-        "expected UnsupportedElement, got {:?}",
-        render_node(node)
-    );
-}
-
 #[test]
 fn writes_generic_elements_and_their_flight() {
     let node = V::El(El {
@@ -607,37 +596,338 @@ fn writes_inner_html_unescaped_and_checks_it_like_react() {
     );
 }
 
+/// Renders `node` as the body of a document, with what it hoists in `<head>`: the shape of
+/// React's `renderToString(<html><head/><body>{node}</body></html>)`.
+fn document(node: &V) -> String {
+    let program = Program::new(vec![], vec![Op::Child]).unwrap();
+    let mut w = InputWriter::new();
+    write(&mut w, node);
+    let mut output = Output::new();
+    render(&program, &w.finish(), &mut output).unwrap();
+    let mut head = Vec::new();
+    output.head.write(&mut head);
+    format!(
+        "<html><head>{}</head><body>{}</body></html>",
+        String::from_utf8(head).unwrap(),
+        String::from_utf8(output.html).unwrap()
+    )
+}
+
 #[test]
-fn falls_back_for_elements_react_hoists() {
-    let link = |props| el("link", props, None);
-    let hoisted = [
-        el("title", vec![], Some(V::S("t"))),
-        el("meta", vec![("name", V::S("x"))], None),
-        link(vec![("rel", V::S("icon")), ("href", V::S("/i"))]),
-        link(vec![
+fn hoists_titles_meta_and_links_leaving_text_separators() {
+    let node = el(
+        "div",
+        vec![],
+        Some(V::Arr(vec![
+            V::S("a"),
+            el("title", vec![], Some(V::S("t"))),
+            V::S("b"),
+            el("meta", vec![("name", V::S("x"))], None),
+            V::S("c"),
+            el(
+                "link",
+                vec![("rel", V::S("icon")), ("href", V::S("/i"))],
+                None,
+            ),
+            V::S("d"),
+        ])),
+    );
+    // A hoisted `<title>` leaves nothing; `<meta>` and `<link>` leave a separator after text.
+    assert_eq!(
+        document(&node),
+        concat!(
+            r#"<html><head><title>t</title><meta name="x"/><link rel="icon" href="/i"/></head>"#,
+            "<body><div>ab<!-- -->c<!-- -->d</div></body></html>"
+        )
+    );
+    // Flight is unchanged.
+    assert!(flight(&node).contains(r#"["$","title",null,{"children":"t"}]"#));
+}
+
+#[test]
+fn writes_the_head_in_reacts_order_with_its_deduplication() {
+    let node = el(
+        "div",
+        vec![],
+        Some(V::Arr(vec![
+            el("title", vec![], Some(V::S("T"))),
+            el(
+                "meta",
+                vec![("name", V::S("viewport")), ("content", V::S("v"))],
+                None,
+            ),
+            el("meta", vec![("charSet", V::S("utf-8"))], None),
+            el(
+                "script",
+                vec![("src", V::S("/a.js")), ("async", V::B(true))],
+                None,
+            ),
+            el(
+                "link",
+                vec![
+                    ("rel", V::S("stylesheet")),
+                    ("href", V::S("/b.css")),
+                    ("precedence", V::S("high")),
+                    ("crossOrigin", V::S("x")),
+                ],
+                None,
+            ),
+            el(
+                "style",
+                vec![("href", V::S("s1")), ("precedence", V::S("low"))],
+                Some(V::S("a{}")),
+            ),
+            el(
+                "link",
+                vec![
+                    ("rel", V::S("stylesheet")),
+                    ("href", V::S("/a.css")),
+                    ("precedence", V::S("low")),
+                ],
+                None,
+            ),
+            el(
+                "style",
+                vec![("href", V::S("s2")), ("precedence", V::S("low"))],
+                Some(V::S("b{}")),
+            ),
+            el(
+                "style",
+                vec![("href", V::S("s1")), ("precedence", V::S("low"))],
+                Some(V::S("dup{}")),
+            ),
+            el(
+                "link",
+                vec![
+                    ("rel", V::S("stylesheet")),
+                    ("href", V::S("s2")),
+                    ("precedence", V::S("high")),
+                ],
+                None,
+            ),
+            el(
+                "script",
+                vec![("src", V::S("/a.js")), ("async", V::B(true))],
+                None,
+            ),
+            el(
+                "script",
+                vec![
+                    ("src", V::S("/m.js")),
+                    ("async", V::B(true)),
+                    ("type", V::S("module")),
+                ],
+                None,
+            ),
+            el(
+                "img",
+                vec![
+                    ("src", V::S("/x.png")),
+                    ("srcSet", V::S("/x2.png 2x")),
+                    ("sizes", V::S("50vw")),
+                    ("crossOrigin", V::S("anonymous")),
+                    ("fetchPriority", V::S("auto")),
+                ],
+                None,
+            ),
+        ])),
+    );
+    assert_eq!(
+        document(&node),
+        concat!(
+            r#"<html><head><meta charSet="utf-8"/><meta name="viewport" content="v"/>"#,
+            r#"<link rel="preload" as="image" imageSrcSet="/x2.png 2x" imageSizes="50vw" crossorigin="" fetchPriority="auto"/>"#,
+            r#"<link rel="stylesheet" href="/b.css" crossorigin="x" data-precedence="high"/>"#,
+            r#"<link rel="stylesheet" href="/a.css" data-precedence="low"/>"#,
+            r#"<style data-precedence="low" data-href="s1 s2">a{}b{}</style>"#,
+            r#"<script src="/a.js" async=""></script><script src="/m.js" async="" type="module"></script>"#,
+            "<title>T</title></head>",
+            r#"<body><div><img src="/x.png" srcSet="/x2.png 2x" sizes="50vw" crossorigin="anonymous" fetchPriority="auto"/></div></body></html>"#
+        )
+    );
+}
+
+#[test]
+fn preloads_ten_images_first_then_the_rest_in_bulk() {
+    let mut images: Vec<V> = (0..12)
+        .map(|i| {
+            let src = Box::leak(format!("/i{i}.png").into_boxed_str());
+            let mut props = vec![("src", V::S(src))];
+            if i == 11 {
+                props.push(("fetchPriority", V::S("high")));
+            }
+            el("img", props, None)
+        })
+        .collect();
+    images.push(el("img", vec![("src", V::S("/i0.png"))], None)); // deduplicated
+    let document = document(&el("div", vec![], Some(V::Arr(images))));
+    let preload = |i: u32| format!(r#"<link rel="preload" as="image" href="/i{i}.png"/>"#);
+    let mut head: String = (0..10).map(preload).collect();
+    head.push_str(r#"<link rel="preload" as="image" href="/i11.png" fetchPriority="high"/>"#);
+    head.push_str(&preload(10));
+    assert!(
+        document.starts_with(&format!("<html><head>{head}</head>")),
+        "{document}"
+    );
+}
+
+#[test]
+fn promotes_a_bulk_preload_when_the_same_image_comes_with_high_priority() {
+    let mut images: Vec<V> = (0..11)
+        .map(|i| {
+            let src = Box::leak(format!("/i{i}.png").into_boxed_str());
+            el("img", vec![("src", V::S(src))], None)
+        })
+        .collect();
+    images.push(el(
+        "script",
+        vec![("src", V::S("/a.js")), ("async", V::B(true))],
+        None,
+    ));
+    images.push(el(
+        "img",
+        vec![("src", V::S("/i10.png")), ("fetchPriority", V::S("high"))],
+        None,
+    ));
+    let document = document(&el("div", vec![], Some(V::Arr(images))));
+    let preload = |i: u32| format!(r#"<link rel="preload" as="image" href="/i{i}.png"/>"#);
+    let high: String = (0..11).map(preload).collect();
+    assert!(
+        document.starts_with(&format!(
+            r#"<html><head>{high}<script src="/a.js" async=""></script></head>"#
+        )),
+        "{document}"
+    );
+}
+
+#[test]
+fn rewrites_a_hoisted_stylesheets_precedence_as_react_does() {
+    let sheet = |props| document(&el("link", props, None));
+    // `data-precedence` goes where a `data-precedence` prop was, or last.
+    assert_eq!(
+        sheet(vec![
+            ("data-precedence", V::S("u")),
             ("rel", V::S("stylesheet")),
-            ("href", V::S("/s.css")),
-            ("precedence", V::S("default")),
+            ("precedence", V::S("p")),
+            ("href", V::S("/a.css")),
+            ("id", V::S("i")),
         ]),
-        el(
-            "script",
-            vec![("src", V::S("/a.js")), ("async", V::B(true))],
+        r#"<html><head><link data-precedence="p" rel="stylesheet" href="/a.css" id="i"/></head><body></body></html>"#
+    );
+    assert_eq!(
+        sheet(vec![
+            ("precedence", V::S("p<")),
+            ("rel", V::S("stylesheet")),
+            ("href", V::S("/a&.css")),
+        ]),
+        r#"<html><head><link rel="stylesheet" href="/a&amp;.css" data-precedence="p&lt;"/></head><body></body></html>"#
+    );
+}
+
+#[test]
+fn skips_a_duplicate_style_without_checking_it() {
+    let style = |children, inner: Option<&'static str>| {
+        let mut props = vec![("href", V::S("s")), ("precedence", V::S("p"))];
+        if let Some(html) = inner {
+            props.push((
+                "dangerouslySetInnerHTML",
+                V::Obj(vec![("__html", V::S(html))]),
+            ));
+        }
+        el("style", props, Some(children))
+    };
+    let node = el(
+        "div",
+        vec![],
+        Some(V::Arr(vec![
+            style(V::S("a"), None),
+            style(V::S("b"), Some("x")),
+        ])),
+    );
+    assert_eq!(
+        document(&node),
+        r#"<html><head><style data-precedence="p" data-href="s">a</style></head><body><div></div></body></html>"#
+    );
+}
+
+#[test]
+fn rejects_bigints_in_props_reacts_flight_puts_in_a_hint() {
+    // React's Flight server emits a resource hint for these, and can't serialize a bigint.
+    invalid(&el(
+        "img",
+        vec![("src", V::S("/a.png")), ("fetchPriority", V::Big("0"))],
+        None,
+    ));
+    invalid(&el(
+        "link",
+        vec![
+            ("rel", V::S("stylesheet")),
+            ("href", V::S("/a.css")),
+            ("integrity", V::Big("1")),
+        ],
+        None,
+    ));
+    // No hint, so no failure: a lazy image, a link inside `<noscript>`.
+    html(&el(
+        "img",
+        vec![
+            ("src", V::S("/a.png")),
+            ("loading", V::S("lazy")),
+            ("fetchPriority", V::Big("0")),
+        ],
+        None,
+    ));
+    html(&el(
+        "noscript",
+        vec![],
+        Some(el(
+            "link",
+            vec![
+                ("rel", V::S("preload")),
+                ("href", V::S("/a.css")),
+                ("as", V::Big("1")),
+            ],
             None,
-        ),
-        el(
-            "style",
-            vec![("href", V::S("h")), ("precedence", V::S("p"))],
-            Some(V::S("a{}")),
-        ),
-        // `<foreignObject>` ends SVG mode.
-        el(
-            "svg",
+        )),
+    ));
+}
+
+#[test]
+fn preloads_images_with_reacts_props() {
+    let image = |props| document(&el("img", props, None));
+    assert_eq!(
+        image(vec![("src", V::S("/a.png")), ("srcSet", V::S(""))]),
+        r#"<html><head><link rel="preload" as="image" href="/a.png" imageSrcSet=""/></head><body><img src="/a.png" srcSet=""/></body></html>"#
+    );
+    assert_eq!(
+        image(vec![
+            ("src", V::S("/a.png")),
+            ("crossOrigin", V::S("use-credentials")),
+            ("referrerPolicy", V::S("no-referrer")),
+            ("type", V::S("image/png")),
+            ("integrity", V::S("sha")),
+        ]),
+        concat!(
+            r#"<html><head><link rel="preload" as="image" href="/a.png" crossorigin="use-credentials" integrity="sha" type="image/png" referrerPolicy="no-referrer"/></head>"#,
+            r#"<body><img src="/a.png" crossorigin="use-credentials" referrerPolicy="no-referrer" type="image/png" integrity="sha"/></body></html>"#
+        )
+    );
+    // Not preloaded: lazy, low priority, `data:` URLs, inside `<picture>` or `<noscript>`.
+    for props in [
+        vec![("src", V::S("/x.png")), ("loading", V::S("lazy"))],
+        vec![("src", V::S("/x.png")), ("fetchPriority", V::S("low"))],
+        vec![("src", V::S("DaTa:x"))],
+        vec![("src", V::S(""))],
+    ] {
+        assert!(image(props).starts_with("<html><head></head>"));
+    }
+    for scope in ["noscript", "picture"] {
+        let node = el(
+            scope,
             vec![],
-            Some(el("foreignObject", vec![], Some(el("title", vec![], None)))),
-        ),
-    ];
-    for node in &hoisted {
-        unsupported(node);
+            Some(el("img", vec![("src", V::S("/x.png"))], None)),
+        );
+        assert!(document(&node).starts_with("<html><head></head>"));
     }
 }
 
@@ -762,35 +1052,6 @@ fn writes_html_head_and_body_as_generic_elements_inside_the_body() {
         html(&node),
         r#"<html lang="en"><head></head><body>x</body></html>"#
     );
-}
-
-#[test]
-fn rejects_images_react_would_preload() {
-    unsupported(&el("img", vec![("src", V::S("/x.png"))], None));
-    unsupported(&el("img", vec![("srcSet", V::S("/x.png 2x"))], None));
-    let written = [
-        vec![("src", V::S("/x.png")), ("loading", V::S("lazy"))],
-        vec![("src", V::S("/x.png")), ("fetchPriority", V::S("low"))],
-        vec![("src", V::S(""))],
-        vec![("src", V::S("data:x"))],
-        vec![("src", V::S("DaTa:x"))],
-        vec![("src", V::N(1.0))],
-        vec![("alt", V::S("a"))],
-    ];
-    for props in written {
-        assert!(html(&el("img", props, None)).starts_with("<img"));
-    }
-    for scope in ["noscript", "picture"] {
-        let node = el(
-            scope,
-            vec![],
-            Some(el("img", vec![("src", V::S("/x.png"))], None)),
-        );
-        assert_eq!(
-            html(&node),
-            format!(r#"<{scope}><img src="/x.png"/></{scope}>"#)
-        );
-    }
 }
 
 #[test]

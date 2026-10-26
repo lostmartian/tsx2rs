@@ -6,7 +6,7 @@
  *   node --conditions=react-server oracle.ts flight
  *     request: {"tree": Tree}                     response: {"payload": string}
  *   node oracle.ts html
- *     request: {"tree", "engineHtml", "engineFlight", "reactPayload"}
+ *     request: {"tree", "engineHtml", "engineFlight", "reactPayload", "document"?: true}
  *     response: {"ok": true} or {"ok": false, "html"?: difference, "flight"?: difference}
  *     request: {"tree", "document"?: true}  (the engine returned an error)
  *     response: {"reactHtml": string} or {"reactThrew": message}
@@ -150,6 +150,12 @@ async function judge(request: JudgeRequest): Promise<Record<string, unknown>> {
     );
   } catch (e) {
     const reactThrew = e instanceof Error ? e.message : String(e);
+    return request.engineHtml === undefined ? { reactThrew } : { ok: false, reactThrew };
+  }
+  // An error while React flushes its <head> (a stylesheet <link> with children) isn't thrown:
+  // renderToString returns a broken document instead. Count it as React failing.
+  if (request.document === true && !reactHtml.includes("</head>")) {
+    const reactThrew = "React wrote a broken document";
     return request.engineHtml === undefined ? { reactThrew } : { ok: false, reactThrew };
   }
   if (request.engineHtml === undefined || request.engineFlight === undefined) {

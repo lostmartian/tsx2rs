@@ -217,7 +217,8 @@ export function decodeFlight(payload: Uint8Array): DecodedFlight {
   const decoder = new FlightDecoder(rows.byId);
   return {
     root: decoder.row("0", []),
-    hints: rows.hints.map(([code, json]) => [code, decoder.json(json, ["(hint)"])] as const),
+    // A hint is plain JSON (`emitHint` writes `JSON.stringify(model)`): `$` means nothing in it.
+    hints: rows.hints.map(([code, json]) => [code, JSON.parse(json) as Decoded] as const),
   };
 }
 
