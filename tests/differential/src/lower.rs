@@ -4,7 +4,7 @@
 //! attribute rules.
 
 use crate::tree::{Element, Tree, Value, json_string};
-use tsx2rs_ir::attribute::{ElementRules, Prop, classify};
+use tsx2rs_ir::attribute::{ElementRules, Prop, classify, is_custom_element};
 use tsx2rs_ir::input::{InputWriter, tag};
 use tsx2rs_ir::{ChunkId, FormatError, Op, Program};
 
@@ -99,6 +99,10 @@ impl Lowering {
                 self.ops.push(Op::Child);
                 self.child_input(node);
             }
+            Tree::Element(e) if e.runtime => {
+                self.ops.push(Op::Child);
+                self.child_input(tree);
+            }
             Tree::Element(e) => self.element(e),
         }
     }
@@ -131,7 +135,36 @@ impl Lowering {
                 }
             }
             Tree::Hole(node) => self.child_input(node),
-            Tree::Element(_) => unreachable!("the generator puts no elements in holes"),
+            Tree::Element(e) => self.element_input(e),
+        }
+    }
+
+    /// An element node (ADR-0007): type, key, props in order with the `children` entry where
+    /// `children` is, then the children node.
+    fn element_input(&mut self, e: &Element) {
+        self.input.tag(tag::ELEMENT).string(e.tag);
+        match &e.key {
+            Some(key) => self.input.tag(tag::STRING).string(key),
+            None => self.input.tag(tag::NULL),
+        };
+        let children = e.children_value();
+        let children_at = children
+            .as_ref()
+            .map(|_| e.children_at.unwrap_or(e.props.len()));
+        self.input
+            .count(e.props.len() + usize::from(children.is_some()));
+        for (i, (name, value)) in e.props.iter().enumerate() {
+            if children_at == Some(i) {
+                self.input.string("children");
+            }
+            self.input.string(name);
+            self.value(value);
+        }
+        if children_at == Some(e.props.len()) {
+            self.input.string("children");
+        }
+        if let Some(children) = &children {
+            self.child_input(children);
         }
     }
 
@@ -146,13 +179,28 @@ impl Lowering {
     fn element(&mut self, e: &Element) {
         let rules = if e.tag == "a" {
             ElementRules::Anchor
+        } else if is_custom_element(e.tag) {
+            ElementRules::Custom
         } else {
             ElementRules::Generic
         };
         let has_children = !e.is_void() && !e.children.is_empty();
+        let mut key = String::new();
+        match &e.key {
+            // Flight escapes a leading `$` (`escapeStringValue`).
+            Some(k) => json_string(
+                &mut key,
+                &if k.starts_with('$') {
+                    format!("${k}")
+                } else {
+                    k.clone()
+                },
+            ),
+            None => key.push_str("null"),
+        }
         self.markup(
             &format!("<{}", e.tag),
-            &format!(r#"["$","{}",null,{{"#, e.tag),
+            &format!(r#"["$","{}",{key},{{"#, e.tag),
         );
         if e.spread {
             self.ops.push(Op::Attributes {
@@ -237,6 +285,16 @@ impl Lowering {
                     self.input.string(name);
                     self.value(value);
                 }
+            }
+            Value::Array(items) => {
+                self.input.tag(tag::ARRAY).count(items.len());
+                for item in items {
+                    self.value(item);
+                }
+            }
+            Value::Html(inner) => {
+                self.input.tag(tag::OBJECT).count(1).string("__html");
+                self.value(inner);
             }
         }
     }
