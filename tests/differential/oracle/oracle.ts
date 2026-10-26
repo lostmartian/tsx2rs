@@ -76,7 +76,7 @@ function toElement(react: ReactModule, tree: Tree): unknown {
   if ("u" in tree) return undefined;
   if ("b" in tree) return BigInt(tree.b);
   const props: Record<string, unknown> = {};
-  if (tree.k !== undefined) props.key = tree.k;
+  if (tree.k !== undefined) props["key"] = tree.k;
   const children = tree.c.map((c) => toElement(react, c));
   if (tree.ci === undefined) {
     for (const [name, value] of tree.a) props[name] = toValue(value);
@@ -84,10 +84,10 @@ function toElement(react: ReactModule, tree: Tree): unknown {
   }
   // `children` as a prop, at its place in the props object.
   tree.a.forEach(([name, value], i) => {
-    if (i === tree.ci) props.children = children.length === 1 ? children[0] : children;
+    if (i === tree.ci) props["children"] = children.length === 1 ? children[0] : children;
     props[name] = toValue(value);
   });
-  if (tree.ci === tree.a.length) props.children = children.length === 1 ? children[0] : children;
+  if (tree.ci === tree.a.length) props["children"] = children.length === 1 ? children[0] : children;
   return react.createElement(tree.t, props);
 }
 
