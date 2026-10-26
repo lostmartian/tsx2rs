@@ -27,9 +27,8 @@ defaults:
 
 env:
   CARGO_TERM_COLOR: never
-  # The base and the pull request build into one target directory, and Gungraun keeps the base's
-  # counts there to compare with.
   CARGO_TARGET_DIR: ${{ github.workspace }}/target
+  # Gungraun keeps the base's counts here, to compare the pull request's with.
   GUNGRAUN_HOME: ${{ github.workspace }}/target/gungraun
   GUNGRAUN_COLOR: never
 
@@ -61,6 +60,10 @@ jobs:
         id: base
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
+          # Its own target directory. In a shared one, cargo would see the pull request's sources
+          # as older than the base's build (the base is checked out later) and reuse that build,
+          # so the base would be measured twice.
+          CARGO_TARGET_DIR: ${{ runner.temp }}/base-target
         run: |
           git worktree add -q "$RUNNER_TEMP/base" "$BASE"
           if [ -f "$RUNNER_TEMP/base/crates/engine/benches/instructions.rs" ]; then
