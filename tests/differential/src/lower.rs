@@ -1,8 +1,10 @@
 //! Lowers a generated tree to a template program and its input, the way the compiler will for
-//! host elements: element structure becomes static chunks, and every text, number and attribute
-//! value is read from the input, so the engine (not this file) does all escaping and separating.
+//! host elements: element structure becomes static chunks, and every text, number and prop value
+//! is read from the input, so the engine (not this file) does all escaping, separating and
+//! attribute rules.
 
-use crate::tree::{Attribute, Element, Tree, html_name};
+use crate::tree::{Element, Tree, Value, json_string};
+use tsx2rs_ir::attribute::{ElementRules, Prop, classify};
 use tsx2rs_ir::input::{InputWriter, tag};
 use tsx2rs_ir::{ChunkId, FormatError, Op, Program};
 
@@ -133,56 +135,68 @@ impl Lowering {
         }
     }
 
-    /// `<tag attrs>children</tag>` and `["$","tag",null,{props}]`, props in React's order:
-    /// attributes as written, then `children` (absent for none, the child for one, an array for
-    /// several), as `createElement(tag, props, ...children)` builds them.
+    /// `<tag props>children</tag>` and `["$","tag",null,{props}]`, props in React's order:
+    /// as written, then `children` (absent for none, the child for one, an array for several),
+    /// as `createElement(tag, props, ...children)` builds them.
+    ///
+    /// Props are lowered the way the compiler lowers them: one `Op::Attributes` for a spread
+    /// (names known only at runtime); otherwise, per prop, a static Flight key and an `Op::Prop`
+    /// with the name and kind from `classify`, or an `Op::Value` (Flight only) for a prop React
+    /// doesn't write.
     fn element(&mut self, e: &Element) {
+        let rules = if e.tag == "a" {
+            ElementRules::Anchor
+        } else {
+            ElementRules::Generic
+        };
+        let has_children = !e.is_void() && !e.children.is_empty();
         self.markup(
             &format!("<{}", e.tag),
             &format!(r#"["$","{}",null,{{"#, e.tag),
         );
-        for (i, (prop, value)) in e.attributes.iter().enumerate() {
-            let comma = if i > 0 { "," } else { "" };
-            self.markup("", &format!(r#"{comma}"{prop}":"#));
-            let name = self.chunk(html_name(prop));
-            match value {
-                Attribute::String(s) => {
-                    self.ops.push(Op::Attribute { name });
-                    self.input.tag(tag::STRING).string(s);
+        if e.spread {
+            self.ops.push(Op::Attributes {
+                rules,
+                comma_after: has_children,
+            });
+            self.input.count(e.props.len());
+            for (name, value) in &e.props {
+                self.input.string(name);
+                self.value(value);
+            }
+        } else {
+            for (i, (name, value)) in e.props.iter().enumerate() {
+                let mut key = String::from(if i > 0 { "," } else { "" });
+                json_string(&mut key, name);
+                key.push(':');
+                self.markup("", &key);
+                match classify(name, rules) {
+                    Prop::Attribute { name, kind } => {
+                        let name = self.chunk(name);
+                        self.ops.push(Op::Prop { name, kind });
+                    }
+                    Prop::Ignored | Prop::Style | Prop::Content | Prop::Ref => {
+                        self.ops.push(Op::Value);
+                    }
                 }
-                Attribute::Bool(b) => {
-                    self.ops.push(Op::BooleanAttribute { name });
-                    self.input.tag(if *b { tag::TRUE } else { tag::FALSE });
-                }
-                Attribute::Null | Attribute::Undefined => {
-                    let t = if matches!(value, Attribute::Null) {
-                        tag::NULL
-                    } else {
-                        tag::UNDEFINED
-                    };
-                    let is_boolean = crate::tree::BOOLEAN_PROPS.iter().any(|(p, _)| p == prop);
-                    self.ops.push(if is_boolean {
-                        Op::BooleanAttribute { name }
-                    } else {
-                        Op::Attribute { name }
-                    });
-                    self.input.tag(t);
-                }
+                self.value(value);
+            }
+            if has_children && !e.props.is_empty() {
+                self.markup("", ",");
             }
         }
         if e.is_void() {
             self.markup("/>", "}]");
             return;
         }
-        let comma = if e.attributes.is_empty() { "" } else { "," };
         match e.children.as_slice() {
             [] => self.markup(">", ""),
             [only] => {
-                self.markup(">", &format!(r#"{comma}"children":"#));
+                self.markup(">", r#""children":"#);
                 self.node(only);
             }
             children => {
-                self.markup(">", &format!(r#"{comma}"children":["#));
+                self.markup(">", r#""children":["#);
                 for (i, child) in children.iter().enumerate() {
                     if i > 0 {
                         self.markup("", ",");
@@ -193,5 +207,29 @@ impl Lowering {
             }
         }
         self.markup(&format!("</{}>", e.tag), "}]");
+    }
+
+    /// A prop value as `Op::Prop`, `Op::Attributes` and `Op::Value` read it.
+    fn value(&mut self, value: &Value) {
+        match value {
+            Value::String(s) => {
+                self.input.tag(tag::STRING).string(s);
+            }
+            Value::Number(n) => {
+                self.input.tag(tag::NUMBER).number(*n);
+            }
+            Value::BigInt(digits) => {
+                self.input.tag(tag::BIGINT).string(digits);
+            }
+            Value::Bool(b) => {
+                self.input.tag(if *b { tag::TRUE } else { tag::FALSE });
+            }
+            Value::Null => {
+                self.input.tag(tag::NULL);
+            }
+            Value::Undefined => {
+                self.input.tag(tag::UNDEFINED);
+            }
+        }
     }
 }

@@ -10,6 +10,7 @@
 mod flight;
 mod html;
 mod input;
+mod js;
 mod render;
 mod script;
 
@@ -44,6 +45,21 @@ pub enum RenderError {
     #[error("bad bigint at byte {offset}")]
     BadBigInt {
         /// Where the bigint's string starts.
+        offset: usize,
+    },
+    /// A value React itself would throw on, such as a bigint for a numeric attribute (React's
+    /// `isNaN` throws a `TypeError`). The request falls back, and Next.js reports the error.
+    #[error("a value React rejects at byte {offset}")]
+    InvalidValue {
+        /// Where the value starts.
+        offset: usize,
+    },
+    /// A prop an [`Op::Attributes`](tsx2rs_ir::Op::Attributes) object can't hold: `style` (not
+    /// supported yet) or content (`children`, `dangerouslySetInnerHTML`, which the template
+    /// writes).
+    #[error("unsupported prop at byte {offset}")]
+    UnsupportedProp {
+        /// Where the prop's name starts.
         offset: usize,
     },
     /// A condition byte other than 0 or 1.

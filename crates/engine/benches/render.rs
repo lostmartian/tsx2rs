@@ -10,6 +10,7 @@
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use tsx2rs_engine::{Output, render, script_string};
+use tsx2rs_ir::attribute::{ElementRules, Kind};
 use tsx2rs_ir::input::{InputWriter, tag};
 use tsx2rs_ir::{ChunkId, Op, OpIndex, Program};
 
@@ -111,9 +112,54 @@ fn attributes() -> Case {
             separator: Some(ChunkId(4)),
         },
         stat(0, 1),
-        Op::Attribute { name: ChunkId(5) },
+        Op::Prop {
+            name: ChunkId(5),
+            kind: Kind::String,
+        },
         stat(7, 8),
-        Op::BooleanAttribute { name: ChunkId(6) },
+        Op::Prop {
+            name: ChunkId(6),
+            kind: Kind::Boolean,
+        },
+        stat(2, 3),
+        Op::EndLoop,
+    ];
+    case(&chunks, ops, w.finish())
+}
+
+/// 500 `<a {...props}>` elements, each with 4 props classified at runtime.
+fn spread_attributes() -> Case {
+    let mut w = InputWriter::new();
+    w.count(500);
+    for i in 0..500 {
+        w.count(4);
+        w.string("className")
+            .tag(tag::STRING)
+            .string(&format!("link link-{i}"));
+        w.string("href")
+            .tag(tag::STRING)
+            .string(&format!("/product/{i}"));
+        w.string("aria-current")
+            .tag(if i == 0 { tag::TRUE } else { tag::FALSE });
+        w.string("data-index").tag(tag::NUMBER).number(f64::from(i));
+    }
+    let chunks = [
+        "<a",                 // 0
+        r#"["$","a",null,{"#, // 1
+        "></a>",              // 2
+        "}]",                 // 3
+        ",",                  // 4
+    ];
+    let ops = vec![
+        Op::Loop {
+            end: OpIndex(4),
+            separator: Some(ChunkId(4)),
+        },
+        stat(0, 1),
+        Op::Attributes {
+            rules: ElementRules::Anchor,
+            comma_after: false,
+        },
         stat(2, 3),
         Op::EndLoop,
     ];
@@ -145,6 +191,7 @@ fn bench(c: &mut Criterion) {
         ("static_page", static_page()),
         ("text_list", text_list()),
         ("attributes", attributes()),
+        ("spread_attributes", spread_attributes()),
         ("props", props()),
     ] {
         let mut out = Output::new();

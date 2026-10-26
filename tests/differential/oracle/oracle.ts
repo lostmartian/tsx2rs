@@ -27,7 +27,7 @@ export type Tree =
   | { b: string }
   | Tree[]
   | { t: string; a: [string, AttributeValue][]; c: Tree[] };
-type AttributeValue = string | boolean | null | { u: 1 };
+type AttributeValue = string | boolean | null | { u: 1 } | { n: string } | { b: string };
 
 const require = createRequire(import.meta.url);
 
@@ -39,6 +39,13 @@ interface ReactModule {
   ): unknown;
 }
 
+function toValue(value: AttributeValue): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if ("n" in value) return Number(value.n);
+  if ("b" in value) return BigInt(value.b);
+  return undefined;
+}
+
 function toElement(react: ReactModule, tree: Tree): unknown {
   if (tree === null || typeof tree === "string" || typeof tree === "boolean") return tree;
   if (Array.isArray(tree)) return tree.map((node) => toElement(react, node));
@@ -46,9 +53,7 @@ function toElement(react: ReactModule, tree: Tree): unknown {
   if ("u" in tree) return undefined;
   if ("b" in tree) return BigInt(tree.b);
   const props: Record<string, unknown> = {};
-  for (const [name, value] of tree.a) {
-    props[name] = value !== null && typeof value === "object" ? undefined : value;
-  }
+  for (const [name, value] of tree.a) props[name] = toValue(value);
   return react.createElement(tree.t, props, ...tree.c.map((c) => toElement(react, c)));
 }
 
