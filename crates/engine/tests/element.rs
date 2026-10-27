@@ -1103,3 +1103,197 @@ fn rejects_malformed_element_input() {
         Err(RenderError::BadTag { .. })
     ));
 }
+
+/// The Flight resource hint rows a node's render emits (ADR-0011).
+fn hints(node: &V) -> String {
+    let program = Program::new(vec![], vec![Op::Child]).unwrap();
+    let mut w = InputWriter::new();
+    write(&mut w, node);
+    let mut output = Output::new();
+    render(&program, &w.finish(), &mut output).unwrap();
+    String::from_utf8(output.hints.rows().to_vec()).unwrap()
+}
+
+#[test]
+fn emits_reacts_flight_hints_for_preloaded_images() {
+    // Options in React's order, whatever the props' order; `crossOrigin` mapped.
+    let image = el(
+        "img",
+        vec![
+            ("src", V::S("/a.png")),
+            ("srcSet", V::S("/a2.png 2x")),
+            ("sizes", V::S("50vw")),
+            ("crossOrigin", V::S("x")),
+            ("integrity", V::S("i")),
+            ("type", V::S("t")),
+            ("fetchPriority", V::S("high")),
+            ("referrerPolicy", V::S("r")),
+            ("alt", V::S("z")),
+        ],
+        None,
+    );
+    assert_eq!(
+        hints(&image),
+        concat!(
+            r#":HL["/a.png","image",{"imageSrcSet":"/a2.png 2x","imageSizes":"50vw","#,
+            r#""crossOrigin":"","integrity":"i","type":"t","fetchPriority":"high","referrerPolicy":"r"}]"#,
+            "\n"
+        )
+    );
+    // Deduplicated; an empty `srcSet` is kept as an option but keys by `src`.
+    let images = el(
+        "div",
+        vec![],
+        Some(V::Arr(vec![
+            el("img", vec![("src", V::S("/a.png"))], None),
+            el("img", vec![("src", V::S("/a.png"))], None),
+            el(
+                "img",
+                vec![("src", V::S("/b.png")), ("srcSet", V::S(""))],
+                None,
+            ),
+        ])),
+    );
+    assert_eq!(
+        hints(&images),
+        ":HL[\"/a.png\",\"image\"]\n:HL[\"/b.png\",\"image\",{\"imageSrcSet\":\"\"}]\n"
+    );
+    // No hint where React doesn't preload: lazy, in `<picture>` or `<noscript>`.
+    assert_eq!(
+        hints(&el(
+            "img",
+            vec![("src", V::S("/a.png")), ("loading", V::S("lazy"))],
+            None
+        )),
+        ""
+    );
+    assert_eq!(
+        hints(&el(
+            "picture",
+            vec![],
+            Some(el("img", vec![("src", V::S("/a.png"))], None))
+        )),
+        ""
+    );
+}
+
+#[test]
+fn emits_reacts_flight_hints_for_links() {
+    let link = |props| hints(&el("link", props, None));
+    assert_eq!(
+        link(vec![
+            ("rel", V::S("preload")),
+            ("href", V::S("/f.woff2")),
+            ("as", V::S("font")),
+            ("crossOrigin", V::S("")),
+            ("type", V::S("font/woff2")),
+            ("media", V::S("m")),
+            ("nonce", V::S("n")),
+        ]),
+        ":HL[\"/f.woff2\",\"font\",{\"crossOrigin\":\"\",\"nonce\":\"n\",\"type\":\"font/woff2\",\"media\":\"m\"}]\n"
+    );
+    // No `as`: `null`. A number `as` stays a number; `NaN` options stay, as `null`.
+    assert_eq!(
+        link(vec![("rel", V::S("preload")), ("href", V::S("/x"))]),
+        ":HL[\"/x\",null]\n"
+    );
+    assert_eq!(
+        link(vec![
+            ("rel", V::S("preload")),
+            ("href", V::S("/x")),
+            ("as", V::N(5.0)),
+            ("fetchPriority", V::N(f64::NAN)),
+        ]),
+        ":HL[\"/x\",5,{\"fetchPriority\":null}]\n"
+    );
+    assert_eq!(
+        link(vec![
+            ("rel", V::S("preload")),
+            ("href", V::S("/x.png")),
+            ("as", V::S("image")),
+            ("imageSrcSet", V::S("/x2.png 2x")),
+            ("imageSizes", V::S("1px")),
+        ]),
+        ":HL[\"/x.png\",\"image\",{\"imageSrcSet\":\"/x2.png 2x\",\"imageSizes\":\"1px\"}]\n"
+    );
+    // Stylesheets preload as `style`, deduplicated with or without `precedence`.
+    let sheets = el(
+        "div",
+        vec![],
+        Some(V::Arr(vec![
+            el(
+                "link",
+                vec![
+                    ("rel", V::S("stylesheet")),
+                    ("href", V::S("/s.css")),
+                    ("precedence", V::S("p")),
+                    ("integrity", V::S("i")),
+                ],
+                None,
+            ),
+            el(
+                "link",
+                vec![("rel", V::S("stylesheet")), ("href", V::S("/s.css"))],
+                None,
+            ),
+        ])),
+    );
+    assert_eq!(
+        hints(&sheets),
+        ":HL[\"/s.css\",\"style\",{\"integrity\":\"i\"}]\n"
+    );
+    // Module preloads: a bare string without options.
+    let modules = el(
+        "div",
+        vec![],
+        Some(V::Arr(vec![
+            el(
+                "link",
+                vec![("rel", V::S("modulepreload")), ("href", V::S("/m.js"))],
+                None,
+            ),
+            el(
+                "link",
+                vec![
+                    ("rel", V::S("modulepreload")),
+                    ("href", V::S("/n.js")),
+                    ("as", V::S("script")),
+                    ("crossOrigin", V::S("use-credentials")),
+                ],
+                None,
+            ),
+        ])),
+    );
+    assert_eq!(
+        hints(&modules),
+        ":Hm\"/m.js\"\n:Hm[\"/n.js\",{\"as\":\"script\",\"crossOrigin\":\"use-credentials\"}]\n"
+    );
+    // None inside `<noscript>`, with `itemProp`, or other rels.
+    assert_eq!(
+        hints(&el(
+            "noscript",
+            vec![],
+            Some(el(
+                "link",
+                vec![("rel", V::S("preload")), ("href", V::S("/x"))],
+                None
+            ))
+        )),
+        ""
+    );
+    assert_eq!(link(vec![("rel", V::S("icon")), ("href", V::S("/i"))]), "");
+}
+
+#[test]
+fn falls_back_for_hinted_elements_in_children_react_dom_does_not_render() {
+    // React's Flight server would emit the image's hint; the engine only does where it renders.
+    let node = el(
+        "script",
+        vec![],
+        Some(el("img", vec![("src", V::S("/a.png"))], None)),
+    );
+    assert!(matches!(
+        render_node(&node),
+        Err(RenderError::UnsupportedElement { .. })
+    ));
+}
