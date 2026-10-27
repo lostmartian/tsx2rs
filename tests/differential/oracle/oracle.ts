@@ -6,7 +6,8 @@
  *   node --conditions=react-server oracle.ts flight
  *     request: {"tree": Tree}                     response: {"payload": string}
  *   node oracle.ts html
- *     request: {"tree", "engineHtml", "engineFlight", "reactPayload", "document"?: true}
+ *     request: {"tree", "engineHtml", "engineFlight", "engineHints", "reactPayload",
+ *               "document"?: true}
  *     response: {"ok": true} or {"ok": false, "html"?: difference, "flight"?: difference}
  *     request: {"tree", "document"?: true}  (the engine returned an error)
  *     response: {"reactHtml": string} or {"reactThrew": message}
@@ -21,6 +22,7 @@
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline";
 import { Writable } from "node:stream";
+import type { Decoded } from "@tsx2rs/identity";
 
 /** A generated React tree (see tests/differential/src/tree.rs for the generator). */
 export type Tree =
@@ -126,6 +128,7 @@ interface JudgeRequest {
   tree: Tree;
   engineHtml?: string;
   engineFlight?: string;
+  engineHints?: string;
   reactPayload?: string;
   document?: boolean;
 }
@@ -164,9 +167,15 @@ async function judge(request: JudgeRequest): Promise<Record<string, unknown>> {
   const identity = await import("@tsx2rs/identity");
   const html = identity.firstHtmlDifference(reactHtml, request.engineHtml);
   const encoder = new TextEncoder();
-  const reactTree = identity.decodeFlight(encoder.encode(request.reactPayload ?? "")).root;
-  const engineTree = identity.decodeFlight(encoder.encode(`0:${request.engineFlight}\n`)).root;
-  const flight = identity.firstTreeDifference(reactTree, engineTree, []);
+  // The element tree and the resource hint rows, in order (the engine writes its hints before
+  // row 0, as React writes them before the rows of the same flush).
+  const decoded = (payload: string) => {
+    const flight = identity.decodeFlight(encoder.encode(payload));
+    return { root: flight.root, hints: flight.hints as unknown as Decoded };
+  };
+  const reactFlight = decoded(request.reactPayload ?? "");
+  const engineFlight = decoded(`${request.engineHints ?? ""}0:${request.engineFlight}\n`);
+  const flight = identity.firstTreeDifference(reactFlight, engineFlight, []);
   return html === undefined && flight === undefined
     ? { ok: true }
     : {
