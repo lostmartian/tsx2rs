@@ -52,16 +52,18 @@ impl Tree {
         }
     }
 
-    /// Whether a compiled component is in children React DOM only turns into a string or
-    /// doesn't render (a `<textarea>`'s, `<option>`'s, `<title>`'s, `<style>`'s or
-    /// `<script>`'s), where the engine falls back.
+    /// Whether children React DOM only turns into a string or doesn't render (a
+    /// `<textarea>`'s, `<option>`'s, `<title>`'s, `<style>`'s or `<script>`'s) hold a compiled
+    /// component, or (outside an `<option>`) an `<img>` or `<link>` React's Flight server may
+    /// hint: the engine falls back there.
     #[must_use]
-    pub fn has_component_as_text(&self) -> bool {
+    pub fn has_unrendered_special_child(&self) -> bool {
         fn walk(tree: &Tree, as_text: bool) -> bool {
             match tree {
                 Tree::Component(inner, _) => as_text || walk(inner, as_text),
                 Tree::Array(nodes) => nodes.iter().any(|n| walk(n, as_text)),
                 Tree::Hole(inner) => walk(inner, as_text),
+                Tree::Element(e) if as_text && matches!(e.tag, "img" | "link") => true,
                 Tree::Element(e) => {
                     let as_text = as_text
                         || matches!(e.tag, "textarea" | "option" | "title" | "style" | "script");
@@ -298,7 +300,17 @@ fn special_props(tag: &str) -> &'static [&'static str] {
         "select" => &["value", "defaultValue", "multiple", "id"],
         "option" => &["value", "selected", "label", "dangerouslySetInnerHTML"],
         "textarea" => &["value", "defaultValue", "rows", "id"],
-        "img" | "source" => &["src", "srcSet", "loading", "fetchPriority", "alt"],
+        "img" | "source" => &[
+            "src",
+            "srcSet",
+            "sizes",
+            "loading",
+            "fetchPriority",
+            "crossOrigin",
+            "integrity",
+            "referrerPolicy",
+            "alt",
+        ],
         "object" => &["data", "type"],
         "title" => &["itemProp", "id", "dangerouslySetInnerHTML"],
         "meta" => &["itemProp", "name", "content", "charSet", "property"],
@@ -311,6 +323,14 @@ fn special_props(tag: &str) -> &'static [&'static str] {
             "onLoad",
             "onError",
             "as",
+            "crossOrigin",
+            "integrity",
+            "nonce",
+            "type",
+            "fetchPriority",
+            "media",
+            "imageSrcSet",
+            "imageSizes",
         ],
         "script" => &[
             "src",
@@ -564,6 +584,12 @@ fn special_string() -> impl Strategy<Value = String> {
         "low",
         "stylesheet",
         "icon",
+        "preload",
+        "modulepreload",
+        "image",
+        "font",
+        "style",
+        "use-credentials",
         "default",
         "application/ld+json",
         "a</script><SCRIPT",
@@ -1013,6 +1039,127 @@ fn document_elements(inner: BoxedStrategy<Tree>) -> impl Strategy<Value = Tree> 
     })
 }
 
+/// Links and images React's Flight server writes resource hints for: `preload` (with `as`
+/// strings, numbers or none), `modulepreload` and `stylesheet` links, and images with
+/// `srcSet`/`sizes`, from small pools so duplicates (and so deduplication) are common; options
+/// include `NaN` and `null`; some inside `<noscript>` or `<picture>`.
+fn resource_links() -> impl Strategy<Value = Tree> {
+    (
+        prop::collection::vec(
+            prop_oneof![3 => resource_link(), 1 => resource_image()],
+            1..6,
+        ),
+        prop::sample::select(vec!["div", "div", "noscript", "picture"]),
+    )
+        .prop_map(|(elements, scope)| {
+            let element = |tag, props, children| {
+                Tree::Element(Element {
+                    tag,
+                    key: None,
+                    props,
+                    spread: false,
+                    runtime: true,
+                    children_at: None,
+                    children,
+                })
+            };
+            let children = elements
+                .into_iter()
+                .map(|(tag, props)| element(tag, props, vec![]))
+                .collect();
+            element(scope, vec![], children)
+        })
+}
+
+/// A `<link>` React's Flight server hints (see [`resource_links`]).
+fn resource_link() -> impl Strategy<Value = (&'static str, Vec<(String, Value)>)> {
+    let option_value = || {
+        prop_oneof![
+            4 => prop::sample::select(vec!["", "anonymous", "use-credentials", "x"])
+                .prop_map(|s| Value::String(s.to_owned())),
+            1 => Just(Value::Number(f64::NAN)),
+            1 => Just(Value::Null),
+            1 => Just(Value::Number(2.0)),
+        ]
+    };
+    let option_names = || {
+        prop::sample::subsequence(
+            vec![
+                "crossOrigin",
+                "integrity",
+                "nonce",
+                "type",
+                "fetchPriority",
+                "referrerPolicy",
+                "imageSrcSet",
+                "imageSizes",
+                "media",
+                "as",
+            ],
+            0..4,
+        )
+    };
+    (
+        prop::sample::select(vec!["preload", "modulepreload", "stylesheet"]),
+        prop::sample::select(vec!["/a", "/b.css", "/c.js", "/d.png"]),
+        prop_oneof![
+            3 => prop::sample::select(vec!["image", "style", "font", "script"])
+                .prop_map(|s| Some(Value::String(s.to_owned()))),
+            1 => Just(None),
+            1 => Just(Some(Value::Number(5.0))),
+        ],
+        option_names().prop_flat_map(move |names| {
+            let n = names.len();
+            (Just(names), prop::collection::vec(option_value(), n))
+        }),
+    )
+        .prop_map(|(rel, href, as_, (names, values))| {
+            let mut props = vec![
+                ("rel".to_owned(), Value::String(rel.to_owned())),
+                ("href".to_owned(), Value::String(href.to_owned())),
+            ];
+            if let Some(as_) = as_ {
+                props.push(("as".to_owned(), as_));
+            }
+            for (name, value) in names.into_iter().zip(values) {
+                if name != "as" {
+                    props.push((name.to_owned(), value));
+                }
+            }
+            ("link", props)
+        })
+}
+
+/// An `<img>` React's Flight server hints (see [`resource_links`]).
+fn resource_image() -> impl Strategy<Value = (&'static str, Vec<(String, Value)>)> {
+    (
+        prop::sample::select(vec!["/d.png", "/e.png", ""]),
+        prop::option::of(prop::sample::select(vec!["/d2.png 2x", ""])),
+        prop::option::of(prop::sample::select(vec!["50vw", "1px"])),
+        prop::option::of(prop::sample::select(vec![
+            "",
+            "anonymous",
+            "use-credentials",
+        ])),
+    )
+        .prop_map(|(src, src_set, sizes, cross_origin)| {
+            let mut props = vec![("src".to_owned(), Value::String(src.to_owned()))];
+            if let Some(cross_origin) = cross_origin {
+                props.push((
+                    "crossOrigin".to_owned(),
+                    Value::String(cross_origin.to_owned()),
+                ));
+            }
+            if let Some(set) = src_set {
+                props.push(("srcSet".to_owned(), Value::String(set.to_owned())));
+            }
+            if let Some(sizes) = sizes {
+                props.push(("sizes".to_owned(), Value::String(sizes.to_owned())));
+            }
+            ("img", props)
+        })
+}
+
 /// A gallery of 9 to 16 images with distinct sources (and one repeated), some lazy, some
 /// `data:`, some high priority, and an `async` script: React preloads the first ten and the
 /// high-priority ones before the script in `<head>`, and the rest after it.
@@ -1138,6 +1285,7 @@ pub fn tree() -> impl Strategy<Value = Tree> {
             1 => image_in_scope(),
             1 => leading_newline(),
             1 => image_gallery(),
+            1 => resource_links(),
             2 => hoistable_in_scope(),
             1 => document_elements(inner.clone()),
             1 => (inner.clone(), prop_oneof![Just(Link::Call), Just(Link::Hole)])

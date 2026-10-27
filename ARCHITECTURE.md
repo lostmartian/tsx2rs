@@ -53,6 +53,7 @@ Runs template programs.
 - **One pass, two outputs:** it walks the ops once, reading each input value once, and writes HTML by React DOM's server rules and Flight by React's Flight rules at the same time.
 - **Escaping lives here and only here:** text and attributes, Flight strings, and Flight for inline `<script>` tags (`script_string`).
 - **Hoisting** (`head.rs`, [ADR-0010](docs/adr/0010-hoisting-into-head.md)): what React DOM hoists into `<head>` (titles, meta, links, stylesheets by precedence, `async` scripts, image preloads) is collected into `Output::head`, in React's queues and with its deduplication; the runtime places it in the document's `<head>`.
+- **Flight resource hints** (`hints.rs`, [ADR-0011](docs/adr/0011-flight-resource-hints.md)): the `:HL`/`:Hm` rows React's Flight server emits for `<img>` and `<link>` elements, deduplicated per request, in `Output::hints`.
 - **Element values** (`render/element.rs`): host elements that reach a hole at runtime, written by React DOM's rules for their type (`input`, `select`/`option`, `textarea`, custom elements, in-place `<script>`/`<style>`/`<title>`/`<meta>`/`<link>`, …), with the context their descendants need (the enclosing `<select>`'s value, SVG mode, `<noscript>` and `<picture>` scopes).
 - **Input is untrusted:** it is checked as it is read (lengths, tags, UTF-8, nesting depth, leftover bytes), and failures are typed errors, never panics.
 

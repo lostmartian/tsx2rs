@@ -3,6 +3,7 @@
 mod element;
 
 use crate::head::Head;
+use crate::hints::Hints;
 use crate::input::{Input, Primitive};
 use crate::{RenderError, flight, html, style};
 use element::Context;
@@ -22,6 +23,10 @@ pub struct Output {
     /// What React DOM hoists into the document's `<head>` (ADR-0010). It accumulates across
     /// renders for one request, with React's deduplication.
     pub head: Head,
+    /// The Flight resource hint rows (`:HL`, `:Hm`) React's Flight server emits for `<img>` and
+    /// `<link>` elements (ADR-0011), deduplicated across renders for one request. They go before
+    /// the Flight rows of the same flush.
+    pub hints: Hints,
 }
 
 impl Output {
@@ -36,6 +41,7 @@ impl Output {
         self.html.clear();
         self.flight.clear();
         self.head.clear();
+        self.hints.clear();
     }
 }
 

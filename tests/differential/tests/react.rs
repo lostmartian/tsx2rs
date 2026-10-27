@@ -37,8 +37,13 @@ fn check(tree: &Tree) -> Result<(), String> {
             {
                 true
             }
-            // A compiled component where React only turns it into a string.
-            (RenderError::UnsupportedElement { .. }, Ok(_)) if tree.has_component_as_text() => true,
+            // A compiled component, or an element React's Flight server hints, in children React
+            // DOM only turns into a string or doesn't render.
+            (RenderError::UnsupportedElement { .. }, Ok(_))
+                if tree.has_unrendered_special_child() =>
+            {
+                true
+            }
             // Something React hoists: in a document, it shows up in `<head>`.
             (RenderError::UnsupportedElement { .. }, Ok(_)) => oracle
                 .react_html(tree, true)
@@ -65,7 +70,8 @@ fn check(tree: &Tree) -> Result<(), String> {
         String::from_utf8(output.html).map_err(|e| e.to_string())?
     );
     let flight = String::from_utf8(output.flight).map_err(|e| e.to_string())?;
-    match oracle.compare(tree, &html, &flight) {
+    let hints = String::from_utf8(output.hints.rows().to_vec()).map_err(|e| e.to_string())?;
+    match oracle.compare(tree, &html, &flight, &hints) {
         Ok(()) => Ok(()),
         Err(Ok(mismatch)) => Err(format!(
             "React and the engine disagree\n  tree:   {}\n  engine html:   {html}\n  engine flight: {flight}\n  oracle: {}",

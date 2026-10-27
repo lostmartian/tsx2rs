@@ -84,7 +84,8 @@ impl Oracle {
         })
     }
 
-    /// Renders `tree` with React and compares React's HTML and Flight with the engine's. The
+    /// Renders `tree` with React and compares React's HTML and Flight (element tree and resource
+    /// hint rows, `engine_hints`) with the engine's. The
     /// HTML is a whole document: `tree` is the body of `<html><head></head><body>`, so the
     /// engine's `engine_html` has its hoisted `<head>` content too.
     ///
@@ -97,6 +98,7 @@ impl Oracle {
         tree: &Tree,
         engine_html: &str,
         engine_flight: &str,
+        engine_hints: &str,
     ) -> Result<(), Result<Mismatch, std::io::Error>> {
         let tree_json = tree.to_json();
         let flight = self
@@ -111,6 +113,8 @@ impl Oracle {
         json_string(&mut request, engine_html);
         request.push_str(r#","engineFlight":"#);
         json_string(&mut request, engine_flight);
+        request.push_str(r#","engineHints":"#);
+        json_string(&mut request, engine_hints);
         let _ = write!(request, r#","reactPayload":{payload},"document":true}}"#);
         let verdict = self.html.ask(&request).map_err(Err)?;
         if verdict == r#"{"ok":true}"# {

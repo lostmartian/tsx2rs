@@ -10,6 +10,7 @@
 
 use super::Renderer;
 use crate::head::Meta;
+use crate::hints::Json;
 use crate::input::{Input, Primitive};
 use crate::js::{self, BLOCKED_URL, is_javascript_url, is_nullish};
 use crate::{RenderError, flight, html};
@@ -241,6 +242,8 @@ struct Special<'i> {
     /// Which [`FLIGHT_HINT_PROPS`] are bigints (bit by position): React's Flight server fails on
     /// a hint it can't serialize.
     bigint_hint_props: u16,
+    /// A `<link>`'s [`FLIGHT_HINT_PROPS`], by position: its Flight resource hint's options.
+    link_hint: [Kept<'i>; 10],
 }
 
 /// The props React's hoisting decisions read (`pushStartInstance`), in [`Special::hoist`]'s order.
@@ -480,6 +483,108 @@ impl<'i> Renderer<'_, '_> {
         }
     }
 
+    /// The Flight resource hint React's Flight server emits for an `<img>` it preloads: a preload
+    /// of `src` (or `""`) as `image`, with the image's options.
+    fn image_hint(&mut self, image: &[Kept<'i>; 9]) {
+        let [
+            src,
+            src_set,
+            _,
+            fetch_priority,
+            sizes,
+            cross_origin,
+            integrity,
+            kind,
+            referrer_policy,
+        ] = image.map(Kept::primitive);
+        let json = |value: Option<Primitive<'i>>| Json(value.unwrap_or(Primitive::Undefined));
+        let href = match src {
+            Some(Primitive::String(s)) => s,
+            _ => "",
+        };
+        let sizes = match sizes {
+            Some(sizes @ Primitive::String(_)) => sizes,
+            _ => Primitive::Undefined,
+        };
+        let cross_origin = match cross_origin {
+            Some(Primitive::String(s)) => {
+                Primitive::String(if s == "use-credentials" { s } else { "" })
+            }
+            _ => Primitive::Undefined,
+        };
+        self.out.hints.preload(
+            href,
+            Json(Primitive::String("image")),
+            &[
+                ("imageSrcSet", json(src_set)),
+                ("imageSizes", Json(sizes)),
+                ("crossOrigin", Json(cross_origin)),
+                ("integrity", json(integrity)),
+                ("type", json(kind)),
+                ("fetchPriority", json(fetch_priority)),
+                ("referrerPolicy", json(referrer_policy)),
+            ],
+        );
+    }
+
+    /// The Flight resource hint React's Flight server emits for a `<link rel="preload">`,
+    /// `"stylesheet"` or `"modulepreload"` outside `<noscript>`, without `itemProp`, with a
+    /// non-empty `href`.
+    fn link_hint(&mut self, state: &Special<'i>, context: Context<'i>) {
+        let [item_prop, rel, href, ..] = state.hoist.map(Kept::primitive);
+        let (Some(Primitive::String(rel)), Some(Primitive::String(href))) = (rel, href) else {
+            return;
+        };
+        if context.noscript || item_prop.is_some() || href.is_empty() {
+            return;
+        }
+        let option = |name: &str| {
+            let at = FLIGHT_HINT_PROPS.iter().position(|&p| p == name);
+            Json(
+                at.and_then(|at| state.link_hint[at].primitive())
+                    .unwrap_or(Primitive::Undefined),
+            )
+        };
+        let options = |names: &[&'static str]| -> Vec<(&'static str, Json<'i>)> {
+            names.iter().map(|&name| (name, option(name))).collect()
+        };
+        let hints = &mut self.out.hints;
+        match rel {
+            "preload" => hints.preload(
+                href,
+                option("as"),
+                &options(&[
+                    "crossOrigin",
+                    "integrity",
+                    "nonce",
+                    "type",
+                    "fetchPriority",
+                    "referrerPolicy",
+                    "imageSrcSet",
+                    "imageSizes",
+                    "media",
+                ]),
+            ),
+            "modulepreload" => {
+                hints.preload_module(href, &options(&["as", "crossOrigin", "integrity", "nonce"]));
+            }
+            "stylesheet" => hints.preload(
+                href,
+                Json(Primitive::String("style")),
+                &options(&[
+                    "crossOrigin",
+                    "integrity",
+                    "nonce",
+                    "type",
+                    "fetchPriority",
+                    "referrerPolicy",
+                    "media",
+                ]),
+            ),
+            _ => {}
+        }
+    }
+
     /// An `<img>`'s preload link (`pushLinkImpl` with the props React builds in the `img` case
     /// of `pushStartInstance`), queued in the `<head>`.
     fn image_preload(&mut self, image: &[Kept<'i>; 9], offset: usize) -> Result<(), RenderError> {
@@ -556,8 +661,14 @@ impl<'i> Renderer<'_, '_> {
             }
             tag::ELEMENT => {
                 *input = peek;
+                let element = input.string()?;
+                if matches!(element, "img" | "link") {
+                    // React's Flight server emits resource hints for these wherever they are;
+                    // the engine emits them where it renders elements. Falls back (ADR-0011).
+                    return Err(RenderError::UnsupportedElement { offset });
+                }
                 self.out.flight.extend_from_slice(b"[\"$\",");
-                flight::string(&mut self.out.flight, input.string()?);
+                flight::string(&mut self.out.flight, element);
                 self.out.flight.push(b',');
                 let key_offset = input.offset();
                 match input.u8()? {
@@ -655,10 +766,18 @@ impl<'i> Renderer<'_, '_> {
             flight::primitive(&mut self.out.flight, value);
         }
         if matches!(kind, Kind::Img | Kind::Link)
-            && matches!(value, Primitive::BigInt(_))
             && let Some(bit) = FLIGHT_HINT_PROPS.iter().position(|&p| p == name)
         {
-            state.bigint_hint_props |= 1 << bit;
+            if matches!(value, Primitive::BigInt(_)) {
+                state.bigint_hint_props |= 1 << bit;
+            }
+            if kind == Kind::Link {
+                state.link_hint[bit] = if is_nullish(value) {
+                    Kept::Absent
+                } else {
+                    Kept::Primitive(value)
+                };
+            }
         }
         let kept = if is_nullish(value) {
             Kept::Absent
@@ -788,10 +907,14 @@ impl<'i> Renderer<'_, '_> {
                 return Err(RenderError::InvalidValue { offset });
             }
             Kind::Img if !context.noscript && !context.picture && preloads(&state.image) => {
+                self.image_hint(&state.image);
                 self.image_preload(&state.image, offset)?;
             }
             // Written here, then moved into the `<head>` queues once complete (ADR-0010).
             Kind::Title | Kind::Meta | Kind::Link | Kind::Script | Kind::StyleElement => {
+                if kind == Kind::Link {
+                    self.link_hint(state, context);
+                }
                 hoist = hoisted(kind, &state.hoist, context);
             }
             _ => {}
