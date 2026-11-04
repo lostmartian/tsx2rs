@@ -57,14 +57,26 @@ pub const MAX_VALUE_DEPTH: usize = 256;
 /// # Errors
 ///
 /// If the input is truncated, has an invalid tag, condition, template or UTF-8 string, nests
-/// values or calls deeper than [`MAX_VALUE_DEPTH`], or has bytes left over. `output` then holds a partial
-/// render and must be discarded.
+/// values or calls deeper than [`MAX_VALUE_DEPTH`], or has bytes left over. `output` then holds a
+/// partial render and must be discarded.
 pub fn render(program: &Program, input: &[u8], output: &mut Output) -> Result<(), RenderError> {
+    render_after(program, input, output, false).map(|_| ())
+}
+
+/// [`render`], continuing after output that ended with a text node (`text_before`), as the
+/// next text node then needs a separator. Returns whether the output ends with a text node.
+/// Build-time folding uses it ([`crate::fold`]).
+pub(crate) fn render_after(
+    program: &Program,
+    input: &[u8],
+    output: &mut Output,
+    text_before: bool,
+) -> Result<bool, RenderError> {
     let mut input = Input::new(input);
     let mut renderer = Renderer {
         program,
         out: output,
-        last_text: false,
+        last_text: text_before,
     };
     renderer.run(program.ops(), &mut input, 0, Context::BODY)?;
     if !input.is_empty() {
@@ -72,7 +84,7 @@ pub fn render(program: &Program, input: &[u8], output: &mut Output) -> Result<()
             offset: input.offset(),
         });
     }
-    Ok(())
+    Ok(renderer.last_text)
 }
 
 struct Renderer<'p, 'o> {
