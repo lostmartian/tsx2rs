@@ -44,6 +44,10 @@ fn print_component(out: &mut String, source: &str, c: &Component) {
         if c.is_async { " async" } else { "" },
         if c.uses_hooks { " hooks" } else { "" },
     );
+    for placed in &c.placed {
+        let holes: Vec<&str> = placed.holes.iter().map(|h| text(source, *h)).collect();
+        let _ = writeln!(out, "  places {} at {holes:?}", placed.prop);
+    }
     for (i, t) in c.returns.iter().enumerate() {
         let _ = writeln!(out, "  return {i}:");
         print_node(out, source, &t.root, 2);
@@ -352,6 +356,31 @@ fn reports_jsx_it_cannot_compile() {
 export default function Page({ items }) {
   return <div>{...items}</div>;
 }
+"
+    ));
+}
+
+#[test]
+fn finds_the_props_a_component_only_places() {
+    insta::assert_snapshot!(templates(
+        r"
+import { Price } from './parts';
+export function Placed({ children, title, footer: end, items }) {
+  return <div>{title}{children}<ul>{items.map((i) => <li key={i}>{children}</li>)}</ul>{end}</div>;
+}
+export function NotPlaced({ children, title = 'x', used, passed, root, branch, inner }) {
+  const n = used.length;
+  if (branch) return root;
+  return (
+    <div>
+      {title}{used}{n}
+      <Price>{passed}</Price>
+      {branch ? inner : null}
+      {(() => children)()}
+    </div>
+  );
+}
+export function Props(props) { return <div>{props.children}</div>; }
 "
     ));
 }

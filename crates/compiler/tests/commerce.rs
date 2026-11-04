@@ -215,7 +215,7 @@ fn product_page_lowers() {
 #[test]
 fn product_page_links() {
     use tsx2rs_compiler::graph::ModuleId;
-    use tsx2rs_compiler::lower::{self, Slot};
+    use tsx2rs_compiler::lower::{self, Body, Slot};
     /// The linked components in a record, by name, nested.
     fn calls(graph: &tsx2rs_compiler::graph::ModuleGraph, record: &[Slot], out: &mut Vec<String>) {
         for slot in record {
@@ -223,13 +223,24 @@ fn product_page_links() {
                 Slot::Call {
                     module,
                     component,
-                    record,
+                    body,
+                    slots,
                     ..
                 } => {
                     let callee = &graph.modules[module.0].components[*component];
-                    out.push(callee.name.clone().unwrap_or_default());
-                    calls(graph, record, out);
+                    let name = callee.name.clone().unwrap_or_default();
+                    match body {
+                        Body::Inline(record) => {
+                            out.push(name);
+                            calls(graph, record, out);
+                        }
+                        Body::Template(t) => out.push(format!("{name} (template {t})")),
+                    }
+                    for (prop, _) in slots {
+                        out.push(format!("slot {prop}"));
+                    }
                 }
+                Slot::Placed { record, .. } => calls(graph, record, out),
                 Slot::Branch {
                     then, otherwise, ..
                 } => {

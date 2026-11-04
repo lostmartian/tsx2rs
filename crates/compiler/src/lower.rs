@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use tsx2rs_engine::fold::{self, FoldError};
 use tsx2rs_ir::attribute::{ElementRules, Prop as Class, classify, is_custom_element};
 use tsx2rs_ir::input::{InputWriter, tag};
-use tsx2rs_ir::{ChunkId, FormatError, Op, OpIndex, Program};
+use tsx2rs_ir::{ChunkId, FormatError, Op, OpIndex, Program, TemplateId};
 
 use crate::graph::{Module, ModuleGraph, ModuleId};
 use crate::template::{
@@ -27,6 +27,9 @@ pub struct Lowered {
     pub program: Program,
     /// What the data function writes, in program order.
     pub record: Vec<Slot>,
+    /// The records of the program's other templates (`Op::Call`, for recursion): template
+    /// `i + 1`'s is `templates[i]`.
+    pub templates: Vec<Vec<Slot>>,
 }
 
 /// One part of a record.
@@ -81,11 +84,27 @@ pub enum Slot {
         key_at: usize,
         /// Its props, in source order, as JSX builds them (no slots: those aren't linked yet).
         props: Vec<ComponentProp>,
-        /// Its children (text, literals and holes only), the `children` prop.
+        /// Its children when they're text, literals and holes: the `children` prop. JSX children
+        /// are a slot instead.
         children: Vec<Node>,
+        /// The records of its slots (ADR-0005, section 6), by prop name: the caller's JSX for a
+        /// prop the callee only places, built by the caller's data function into the call's
+        /// props, and placed by the callee (`Slot::Placed`). JSX children are the `children`
+        /// slot.
+        slots: Vec<(String, Vec<Self>)>,
         /// The element.
         span: Range,
-        /// The callee's own record, built by its data function.
+        /// Where the callee's template is.
+        body: Body,
+    },
+    /// A hole where a callee places a slot: its value, written by the callee's data function, is
+    /// the slot's record.
+    Placed {
+        /// The prop.
+        prop: String,
+        /// The hole, in the callee's source.
+        span: Range,
+        /// The slot's record, in the caller's source.
         record: Vec<Self>,
     },
     /// Which `return` ran, as a chain of conditions, then that return's record. One return is
@@ -96,6 +115,19 @@ pub enum Slot {
     /// Whether React's Flight wraps the root element in an array (ADR-0008), computed by the
     /// runtime; read once before the element and once after it.
     RootWrap,
+}
+
+/// A call's slot records, by prop name.
+type SlotRecords = Vec<(String, Vec<Slot>)>;
+
+/// Where a linked callee's template is.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Body {
+    /// Inlined in place, with the callee's own record.
+    Inline(Vec<Slot>),
+    /// Run with `Op::Call` (recursion): the program's template with this index, whose record is
+    /// in [`Lowered::templates`].
+    Template(u32),
 }
 
 /// How a value is encoded: by the op that reads it.
@@ -184,8 +216,12 @@ pub fn linked(graph: &ModuleGraph, module: ModuleId, index: usize) -> Result<Low
     let lowering = Lowering {
         link: Some(Link {
             graph,
-            from: module,
-            stack: vec![(module, index)],
+            frames: vec![Frame {
+                module,
+                index,
+                slots: Vec::new(),
+            }],
+            templates: HashMap::new(),
         }),
         ..Lowering::default()
     };
@@ -196,8 +232,16 @@ fn lower(mut lowering: Lowering<'_>, component: &Component) -> Result<Lowered, L
     let record = lowering.returns(&component.returns, true)?;
     let record = returns_record(record);
     lowering.flush();
-    let program = Program::new(lowering.chunks, lowering.ops)?;
-    Ok(Lowered { program, record })
+    let (ops, records): (Vec<_>, Vec<_>) = lowering.called.into_iter().unzip();
+    let program = Program::with_templates(
+        lowering.chunks,
+        std::iter::once(lowering.ops).chain(ops).collect(),
+    )?;
+    Ok(Lowered {
+        program,
+        record,
+        templates: records,
+    })
 }
 
 /// A component's record: one return's record is just that record.
@@ -208,51 +252,131 @@ fn returns_record(record: Slot) -> Vec<Slot> {
     }
 }
 
-/// Linking state: the graph, the module whose source is being lowered, and the components being
-/// inlined (to find recursion).
+/// Linking state: the graph, the components being inlined, and the templates made for
+/// recursion.
 struct Link<'g> {
     graph: &'g ModuleGraph,
-    from: ModuleId,
-    stack: Vec<(ModuleId, usize)>,
+    /// The component being lowered, then each callee inlined into it, innermost last.
+    frames: Vec<Frame>,
+    /// The template index of each component run with `Op::Call`.
+    templates: HashMap<(ModuleId, usize), u32>,
+}
+
+/// A component being lowered.
+struct Frame {
+    module: ModuleId,
+    index: usize,
+    /// The slots its caller passed.
+    slots: Vec<SlotArg>,
+}
+
+/// A slot passed to a callee: the caller's JSX for a prop the callee places.
+struct SlotArg {
+    prop: String,
+    node: Node,
+    /// Where the callee places it.
+    holes: Vec<Range>,
+    /// Its record, once lowered.
+    record: Option<Vec<Slot>>,
+}
+
+/// What a component element links to.
+struct Callee<'g> {
+    module: ModuleId,
+    index: usize,
+    component: &'g Component,
+    slots: Vec<SlotArg>,
+    /// Already being lowered: run with `Op::Call`.
+    recursive: bool,
 }
 
 impl<'g> Link<'g> {
-    /// The compiled server component `element` links to, if it can be inlined.
-    fn callee(&self, element: &ComponentElement) -> Option<(ModuleId, usize, &'g Component)> {
-        let simple = |node: &Node| {
-            matches!(
-                node,
-                Node::Text(_) | Node::Number(_) | Node::Literal(_) | Node::Hole(_)
-            )
-        };
-        if !element.module_scope
-            || element
-                .props
-                .iter()
-                .any(|p| matches!(p, ComponentProp::Slot { .. }))
-            || !element.children.iter().all(simple)
-        {
+    /// The module whose source is being lowered.
+    fn from(&self) -> ModuleId {
+        self.frames.last().map_or(ModuleId(0), |f| f.module)
+    }
+
+    /// The compiled server component `element` links to, if it can be.
+    fn callee(&self, element: &ComponentElement) -> Option<Callee<'g>> {
+        if !element.module_scope {
             return None;
         }
+        let from = self.from();
         let tag = (&element.name, element.member.as_deref());
-        let (module, index) = match usage::component(self.graph, self.from, tag.0, tag.1) {
+        let (module, index) = match usage::component(self.graph, from, tag.0, tag.1) {
             usage::Component::Server { module, export } => {
                 (module, exported(&self.graph.modules[module.0], &export)?)
             }
             usage::Component::Local if tag.1.is_none() => {
-                let components = &self.graph.modules[self.from.0].components;
+                let components = &self.graph.modules[from.0].components;
                 let index = components
                     .iter()
                     .position(|c| c.name.as_deref() == Some(tag.0.as_str()))?;
-                (self.from, index)
+                (from, index)
             }
             _ => return None,
         };
         let component = &self.graph.modules[module.0].components[index];
-        let linkable =
-            !component.is_async && !component.uses_hooks && !self.stack.contains(&(module, index));
-        linkable.then_some((module, index, component))
+        if component.is_async || component.uses_hooks {
+            return None;
+        }
+        let slots = slots(element, component)?;
+        let recursive = self
+            .frames
+            .iter()
+            .any(|f| (f.module, f.index) == (module, index));
+        // A template run with `Call` is shared by every call, so it can't hold one caller's slots.
+        if recursive && !slots.is_empty() {
+            return None;
+        }
+        Some(Callee {
+            module,
+            index,
+            component,
+            slots,
+            recursive,
+        })
     }
+}
+
+/// The slots `element` passes `callee`: its JSX props, and its children when they hold JSX.
+/// `None` when the callee doesn't only place one of them.
+fn slots(element: &ComponentElement, callee: &Component) -> Option<Vec<SlotArg>> {
+    let simple = |node: &Node| {
+        matches!(
+            node,
+            Node::Text(_) | Node::Number(_) | Node::Literal(_) | Node::Hole(_)
+        )
+    };
+    let mut jsx: Vec<(&str, Node)> = element
+        .props
+        .iter()
+        .filter_map(|p| match p {
+            ComponentProp::Slot { name, template } => Some((name.as_str(), template.clone())),
+            ComponentProp::Value(_) => None,
+        })
+        .collect();
+    if !element.children.iter().all(simple) {
+        if jsx.iter().any(|(name, _)| *name == "children") {
+            return None; // both a `children` prop and children: the children win; not linked
+        }
+        let node = match element.children.as_slice() {
+            [only] => only.clone(),
+            children => Node::Fragment(children.to_vec()), // an array, as JSX passes them
+        };
+        jsx.push(("children", node));
+    }
+    jsx.into_iter()
+        .map(|(prop, node)| {
+            let placed = callee.placed.iter().find(|p| p.prop == prop)?;
+            Some(SlotArg {
+                prop: prop.to_owned(),
+                node,
+                holes: placed.holes.clone(),
+                record: None,
+            })
+        })
+        .collect()
 }
 
 /// The index of the component `module` exports as `export`.
@@ -269,6 +393,7 @@ fn exported(module: &Module, export: &Export) -> Option<usize> {
 struct Mark {
     ops: usize,
     chunks: usize,
+    called: usize,
     pending: Pending,
 }
 
@@ -289,6 +414,8 @@ struct Lowering<'g> {
     pending: Pending,
     /// `None` when lowering a component on its own.
     link: Option<Link<'g>>,
+    /// The templates after the entry, with their records.
+    called: Vec<(Vec<Op>, Vec<Slot>)>,
 }
 
 impl Lowering<'_> {
@@ -296,6 +423,7 @@ impl Lowering<'_> {
         Mark {
             ops: self.ops.len(),
             chunks: self.chunks.len(),
+            called: self.called.len(),
             pending: self.pending.clone(),
         }
     }
@@ -305,30 +433,44 @@ impl Lowering<'_> {
         self.chunks.truncate(mark.chunks);
         self.interned.retain(|_, id| (*id as usize) < mark.chunks);
         self.pending = mark.pending;
+        // Templates made since use the chunks just dropped.
+        self.called.truncate(mark.called);
+        if let Some(link) = self.link.as_mut() {
+            link.templates.retain(|_, t| (*t as usize) <= mark.called);
+        }
     }
 
-    /// A component element: inlined when it links to a compiled component, else a `Child` hole.
+    /// A component element: inlined when it links to a compiled component, run with `Call` when
+    /// that component is already being lowered, else a `Child` hole.
     fn component_element(&mut self, element: &ComponentElement, record: &mut Vec<Slot>) {
-        let Some((module, index, callee)) =
-            self.link.as_ref().and_then(|link| link.callee(element))
-        else {
+        let Some(callee) = self.link.as_ref().and_then(|link| link.callee(element)) else {
             self.child(element.span, record);
             return;
         };
         let mark = self.mark();
-        let from = self.enter(module, index);
-        let inlined = self.returns(&callee.returns, true);
-        self.leave(from);
-        if let Ok(inlined) = inlined {
+        let body = if callee.recursive {
+            self.call(&callee)
+        } else {
+            self.inline(callee.module, callee.index, callee.component, callee.slots)
+        };
+        if let Ok((body, slots)) = body {
             record.push(Slot::Call {
-                module,
-                component: index,
+                module: callee.module,
+                component: callee.index,
                 key: element.key.clone(),
                 key_at: element.key_at,
                 props: element.props.clone(),
-                children: element.children.clone(),
+                children: if slots.iter().any(|(p, _)| p == "children")
+                    && !element.props.iter().any(
+                        |p| matches!(p, ComponentProp::Slot { name, .. } if name == "children"),
+                    ) {
+                    Vec::new() // the `children` slot
+                } else {
+                    element.children.clone()
+                },
+                slots,
                 span: element.span,
-                record: returns_record(inlined),
+                body,
             });
         } else {
             // The callee can't be compiled (its own lowering reports why): React renders it.
@@ -337,22 +479,108 @@ impl Lowering<'_> {
         }
     }
 
-    /// Starts lowering a callee's source; returns the caller's module.
-    fn enter(&mut self, module: ModuleId, index: usize) -> ModuleId {
-        match self.link.as_mut() {
-            Some(link) => {
-                link.stack.push((module, index));
-                std::mem::replace(&mut link.from, module)
-            }
-            None => module,
+    /// Inlines a callee's templates here, with its caller's slots placed where it places them.
+    fn inline(
+        &mut self,
+        module: ModuleId,
+        index: usize,
+        component: &Component,
+        slots: Vec<SlotArg>,
+    ) -> Result<(Body, SlotRecords), LowerError> {
+        if let Some(link) = self.link.as_mut() {
+            link.frames.push(Frame {
+                module,
+                index,
+                slots,
+            });
         }
+        let inlined = self.returns(&component.returns, true);
+        let frame = self.link.as_mut().and_then(|link| link.frames.pop());
+        let slots = frame
+            .map(|f| f.slots)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| (s.prop, s.record.unwrap_or_default()))
+            .collect();
+        Ok((Body::Inline(returns_record(inlined?)), slots))
     }
 
-    fn leave(&mut self, from: ModuleId) {
-        if let Some(link) = self.link.as_mut() {
-            link.stack.pop();
-            link.from = from;
+    /// `Op::Call` to the callee's template, made the first time it's called.
+    fn call(&mut self, callee: &Callee<'_>) -> Result<(Body, SlotRecords), LowerError> {
+        let key = (callee.module, callee.index);
+        let known = self.link.as_ref().and_then(|link| link.templates.get(&key));
+        let template = match known {
+            Some(&template) => template,
+            None => self.template_for(callee)?,
+        };
+        self.op(Op::Call {
+            template: TemplateId(template),
+        });
+        Ok((Body::Template(template), Vec::new()))
+    }
+
+    /// Lowers a callee into a template of its own, with nothing of its callers around it.
+    fn template_for(&mut self, callee: &Callee<'_>) -> Result<u32, LowerError> {
+        let template = u32::try_from(self.called.len() + 1).unwrap_or(u32::MAX);
+        self.called.push((Vec::new(), Vec::new())); // reserved: calls inside it refer to it
+        let frames = self.link.as_mut().map(|link| {
+            link.templates
+                .insert((callee.module, callee.index), template);
+            std::mem::replace(
+                &mut link.frames,
+                vec![Frame {
+                    module: callee.module,
+                    index: callee.index,
+                    slots: Vec::new(),
+                }],
+            )
+        });
+        let ops = std::mem::take(&mut self.ops);
+        let pending = std::mem::take(&mut self.pending);
+        let lowered = self.returns(&callee.component.returns, true).map(|record| {
+            self.flush();
+            returns_record(record)
+        });
+        let own = std::mem::replace(&mut self.ops, ops);
+        self.pending = pending;
+        if let (Some(link), Some(frames)) = (self.link.as_mut(), frames) {
+            link.frames = frames;
         }
+        // On failure the caller undoes to before the reservation.
+        let record = lowered?;
+        self.called[template as usize - 1] = (own, record);
+        Ok(template)
+    }
+
+    /// A hole: a slot when the callee being inlined places one there, else a `Child`.
+    fn hole(&mut self, span: Range, record: &mut Vec<Slot>) -> Result<(), LowerError> {
+        let placed = self.link.as_ref().and_then(|link| {
+            let frame = link.frames.last()?;
+            let i = frame.slots.iter().position(|s| s.holes.contains(&span))?;
+            Some((i, frame.slots[i].node.clone()))
+        });
+        let Some((i, node)) = placed else {
+            self.child(span, record);
+            return Ok(());
+        };
+        // The slot's JSX is the caller's: lowered in the caller's frame.
+        let frame = self.link.as_mut().and_then(|link| link.frames.pop());
+        let mut slot = Vec::new();
+        let lowered = self.node(&node, &mut slot);
+        if let (Some(link), Some(mut frame)) = (self.link.as_mut(), frame) {
+            let arg = &mut frame.slots[i];
+            if arg.record.is_none() {
+                arg.record = Some(slot.clone());
+            }
+            let prop = arg.prop.clone();
+            link.frames.push(frame);
+            record.push(Slot::Placed {
+                prop,
+                span,
+                record: slot,
+            });
+        }
+        lowered
     }
 
     fn chunk(&mut self, bytes: &[u8]) -> ChunkId {
@@ -493,10 +721,7 @@ impl Lowering<'_> {
                 self.fold_node(&w.finish(), (0, 0))
             }
             Node::Fragment(children) => self.children_value(children, record),
-            Node::Hole(span) => {
-                self.child(*span, record);
-                Ok(())
-            }
+            Node::Hole(span) => self.hole(*span, record),
             Node::Component(element) => {
                 self.component_element(element, record);
                 Ok(())

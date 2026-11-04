@@ -19,5 +19,6 @@ Format: [MADR](https://adr.github.io/madr/)-style. Context → Decision → Cons
 | [0011](0011-flight-resource-hints.md) | Flight resource hints, and hinted elements always as element values | Accepted |
 | [0012](0012-compiling-templates.md) | Compiling templates: template trees, holes, folding through the engine | Accepted |
 | [0013](0013-linking-pending-calls.md) | Linking by inlining, with pending calls as `jsx` arguments | Accepted |
+| [0014](0014-slots-and-calls.md) | Slots placed by the callee, and `Call` for recursion | Accepted |
 
 Background research (benchmarks, spikes, the full decision history before this repository existed) lives in the separate `tsx2rs-lab` repository.

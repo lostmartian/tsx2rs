@@ -1,0 +1,38 @@
+---
+source: crates/compiler/tests/template.rs
+expression: "templates(r\"\nimport { Price } from './parts';\nexport function Placed({ children, title, footer: end, items }) {\n  return <div>{title}{children}<ul>{items.map((i) => <li key={i}>{children}</li>)}</ul>{end}</div>;\n}\nexport function NotPlaced({ children, title = 'x', used, passed, root, branch, inner }) {\n  const n = used.length;\n  if (branch) return root;\n  return (\n    <div>\n      {title}{used}{n}\n      <Price>{passed}</Price>\n      {branch ? inner : null}\n      {(() => children)()}\n    </div>\n  );\n}\nexport function Props(props) { return <div>{props.children}</div>; }\n\")"
+---
+component Placed
+  places children at ["children", "children"]
+  places title at ["title"]
+  places footer at ["end"]
+  return 0:
+    <div>
+      hole {title}
+      hole {children}
+      <ul>
+        map {items}
+          return 0:
+            <li key={i}>
+              hole {children}
+      hole {end}
+component NotPlaced
+  places inner at ["inner"]
+  return 0:
+    hole {root}
+  return 1:
+    <div>
+      hole {title}
+      hole {used}
+      hole {n}
+      component <Price>
+        hole {passed}
+      ?: {branch}
+        hole {inner}
+      else
+        null
+      hole {(() => children)()}
+component Props
+  return 0:
+    <div>
+      hole {props.children}

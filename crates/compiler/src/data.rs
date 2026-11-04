@@ -187,8 +187,11 @@ impl Writer<'_> {
                 key_at,
                 props,
                 children,
+                slots,
                 ..
-            } => self.pending_call(key.as_ref(), *key_at, props, children),
+            } => self.pending_call(key.as_ref(), *key_at, props, children, slots),
+            // The value placed is the slot's record, built by the caller.
+            Slot::Placed { span, .. } => format!("({})", self.text(*span)),
             Slot::RootKey | Slot::RootWrap => return None, // the runtime's (ADR-0008)
         })
     }
@@ -215,15 +218,22 @@ impl Writer<'_> {
     /// argument is `undefined`. The runtime takes the key and props from them as `jsx` does,
     /// then calls the callee's data function once this record is complete.
     fn pending_call(
-        &self,
+        &mut self,
         key: Option<&Key>,
         key_at: usize,
         props: &[ComponentProp],
         children: &[Node],
+        slots: &[(String, Vec<Slot>)],
     ) -> String {
+        let source = self.source;
         let key_value = |key: &Key| match key {
             Key::Static(key) => json_key(key),
-            Key::Dynamic(span) => format!("({})", self.text(*span)),
+            Key::Dynamic(span) => format!(
+                "({})",
+                source
+                    .get(span.0 as usize..span.1 as usize)
+                    .unwrap_or_default()
+            ),
         };
         let in_config = props
             .iter()
@@ -234,12 +244,29 @@ impl Writer<'_> {
             if let (true, Some(key), true) = (in_config, key, i == key_at) {
                 entries.push(format!("\"key\": {}", key_value(key)));
             }
-            if let ComponentProp::Value(prop) = prop {
-                entries.push(self.prop(prop)); // slots are never linked
+            match prop {
+                ComponentProp::Value(prop) => entries.push(self.prop(prop)),
+                // A slot's value is its record (`Slot::Placed`).
+                ComponentProp::Slot { name, .. } => {
+                    if let Some((_, record)) = slots.iter().find(|(p, _)| p == name) {
+                        let record = self.record(record, None);
+                        entries.push(format!("{}: {record}", json_key(name)));
+                    }
+                }
             }
         }
         if let (true, Some(key), true) = (in_config, key, key_at == props.len()) {
             entries.push(format!("\"key\": {}", key_value(key)));
+        }
+        // JSX children: the `children` slot, last, as JSX passes children.
+        let named = |name: &str| {
+            props
+                .iter()
+                .any(|p| matches!(p, ComponentProp::Slot { name: n, .. } if n == name))
+        };
+        for (prop, record) in slots.iter().filter(|(p, _)| !named(p)) {
+            let record = self.record(record, None);
+            entries.push(format!("{}: {record}", json_key(prop)));
         }
         let children: Vec<String> = children.iter().filter_map(|c| self.child(c)).collect();
         match children.as_slice() {
