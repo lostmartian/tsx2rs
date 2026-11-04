@@ -95,6 +95,22 @@ jobs:
       - name: Build every fixture with Next.js and compare its output with itself
         run: pnpm test:identity
 
+  adapter:
+    name: Adapter (next build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:native
+      - name: Build an app with the adapter (Turbopack and webpack) and check what it produced
+        run: pnpm test:adapter
+
   differential:
     name: Differential (engine vs React)
     runs-on: ubuntu-latest
@@ -118,7 +134,7 @@ jobs:
   ci-ok:
     name: CI OK
     if: always()
-    needs: [rust, rust-deps, rust-coverage, js, identity, differential]
+    needs: [rust, rust-deps, rust-coverage, js, identity, adapter, differential]
     runs-on: ubuntu-latest
     steps:
       - name: All required jobs passed

@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowJs": false,
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src", "test", "test-e2e/*.ts", "vitest.config.ts", "vitest.e2e.config.ts"]
+}

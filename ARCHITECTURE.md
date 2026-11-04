@@ -64,10 +64,12 @@ Runs template programs.
 ### `crates/napi`
 The only bridge to Node.js (napi-rs), published as `@tsx2rs/native`. Thin: converts arguments, calls `compiler`/`engine`, maps errors. No logic. It exports `compileApp` (the adapter's build, ADR-0017); rendering comes with the runtime. This is the only crate allowed `unsafe` (FFI), and it catches panics at the boundary.
 
-### `packages/adapter` *(planned)*
-`@tsx2rs/adapter`: the Next.js Deployment Adapter.
-- **During the build,** a bundler transform (registered in `modifyConfig`) adds each server module's generated data functions to Next.js's own bundle, next to the unchanged original code.
-- **In `onBuildComplete`,** it links each route's programs, captures Next.js's wrapper (document, router tree, layout payload), and writes the **manifest**: versioned JSON listing routes, programs, wrapper templates and fallback reasons.
+### `packages/adapter`
+`@tsx2rs/adapter`: the Next.js Deployment Adapter ([ADR-0017](docs/adr/0017-adapter-build.md)), set as `adapterPath`.
+- **`modifyConfig`** (production builds only): compiles the app's pages once (`compileApp`), and adds a loader for Turbopack and webpack that runs on server bundles only.
+- **The loader** appends each compiled server module's data functions to it in Next.js's own bundle, next to the unchanged original code, and registers them under the module's path (`globalThis[Symbol.for("tsx2rs.data")]`).
+- **`onBuildComplete`** writes the **manifest** (`<distDir>/tsx2rs/manifest.json`: versioned JSON listing each page route, its pathnames and Next.js entrypoint, and either its program and encoder files or its fallback reasons) and prints *compiled* or *falls back: reason* for every route.
+- *Planned (7.3):* capturing Next.js's wrapper around the page (document, router tree, layout payload).
 
 ### `packages/runtime`
 `@tsx2rs/runtime`: what runs at request time.

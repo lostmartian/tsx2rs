@@ -1,0 +1,29 @@
+{
+  "name": "@tsx2rs/adapter",
+  "version": "0.0.0",
+  "private": true,
+  "description": "tsx2rs Next.js Deployment Adapter: compiles server components at build time",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lostmartian/tsx2rs.git",
+    "directory": "packages/adapter"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./loader": "./src/loader.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tsx2rs/native": "workspace:*"
+  },
+  "peerDependencies": {
+    "next": "16.4.3"
+  },
+  "devDependencies": {
+    "next": "catalog:"
+  }
+}

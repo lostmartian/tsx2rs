@@ -1,0 +1,23 @@
+{
+  "name": "@tsx2rs/adapter-e2e-app",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The adapter's end-to-end test app: built with next build and @tsx2rs/adapter",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "next build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tsx2rs/adapter": "workspace:*",
+    "@tsx2rs/runtime": "workspace:*",
+    "next": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:"
+  }
+}
