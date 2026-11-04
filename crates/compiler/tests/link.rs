@@ -77,6 +77,7 @@ fn links(record: &[Slot]) -> Vec<String> {
                 out.push("slot".to_owned());
                 out.extend(links(record));
             }
+            Slot::Keyed { record, .. } => out.extend(links(record)),
             Slot::Value {
                 kind: ValueKind::Child,
                 ..
@@ -117,8 +118,20 @@ export default function Page({ x }) {
         ),
     ]);
     let page = page(&g);
-    let [Slot::RootWrap, Slot::RootKey, call, Slot::RootWrap] = page.record.as_slice() else {
+    let [
+        Slot::RootWrap,
+        Slot::Keyed {
+            root: true,
+            record: main,
+            ..
+        },
+        Slot::RootWrap,
+    ] = page.record.as_slice()
+    else {
         panic!("{:?}", page.record);
+    };
+    let [call] = main.as_slice() else {
+        panic!("{main:?}");
     };
     let Slot::Call {
         module,
@@ -134,7 +147,16 @@ export default function Page({ x }) {
         g.modules[module.0].components[*component].name.as_deref(),
         Some("Price")
     );
-    assert_eq!(record.len(), 5, "{record:?}"); // wrap, key, amount, currency, wrap
+    // Wrap, the `<p>` with its key and `{amount}` and `{currency}`, wrap.
+    let [
+        Slot::RootWrap,
+        Slot::Keyed { record: p, .. },
+        Slot::RootWrap,
+    ] = record.as_slice()
+    else {
+        panic!("{record:?}");
+    };
+    assert_eq!(p.len(), 2, "{p:?}");
     let out = rendered(&page, |w| {
         root_open(w, false, None);
         root_open(w, false, None);
@@ -292,8 +314,11 @@ export default function Page({ t, y }) {
         links(&page.record),
         ["call", "slot", "child", "slot", "child"]
     );
-    let [_, _, Slot::Call { slots, .. }, _] = page.record.as_slice() else {
+    let [_, Slot::Keyed { record, .. }, _] = page.record.as_slice() else {
         panic!("{:?}", page.record);
+    };
+    let [Slot::Call { slots, .. }] = record.as_slice() else {
+        panic!("{record:?}");
     };
     let names: Vec<&str> = slots.iter().map(|(p, _)| p.as_str()).collect();
     assert_eq!(names, ["title", "children"]);

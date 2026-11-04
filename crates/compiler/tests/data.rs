@@ -107,7 +107,7 @@ export default function Price({ amount, className }) {
             &module,
             "m.__tsx2rs_data_Price({ amount: 2, className: 'x' })"
         ),
-        r#"["x","$2.00"]"#
+        r#"[[null,"x","$2.00"]]"#
     );
 }
 
@@ -125,7 +125,7 @@ export const calls_made = () => calls;
     // `count(a)` runs once; falsy, its value is the record's child.
     assert_eq!(
         run(&module, "m.__tsx2rs_data_C({ a: 0, v: null })"),
-        r"[[false,[0]],[false,[]],[false,[]]]"
+        r"[[null,[false,[0]],[false,[]],[false,[]]]]"
     );
     assert_eq!(
         run(
@@ -137,7 +137,7 @@ export const calls_made = () => calls;
     );
     assert_eq!(
         run(&module, "m.__tsx2rs_data_C({ a: 'k', v: 0 })"),
-        r#"[[true,["k"]],[true,[0]],[true,[]]]"#
+        r#"[[null,[true,["k"]],[true,[0]],[true,[]]]]"#
     );
 }
 
@@ -160,7 +160,7 @@ fn keeps_the_components_own_map_calls() {
             &module,
             "m.__tsx2rs_data_L({ xs: [{ id: 1, ok: true, name: 'a' }, { ok: true, name: 'b' }, { id: 3, ok: false }] })"
         ),
-        r#"[[["1",0,"a"],[null,1,"b"]],[[],[],[]]]"#
+        r#"[[null,[[["1",0,"a"]],[[null,1,"b"]]],[[],[],[]]]]"#
     );
 }
 
@@ -172,13 +172,13 @@ fn indexes_several_returns_and_builds_spread_props() {
 }
 "#;
     let module = functions(source);
-    assert_eq!(run(&module, "m.__tsx2rs_data_P({})"), "[0,[]]");
+    assert_eq!(run(&module, "m.__tsx2rs_data_P({})"), "[[0,[]]]");
     assert_eq!(
         run(
             &module,
             "m.__tsx2rs_data_P({ p: 'i', rest: { target: '_blank', id: 'over' } })"
         ),
-        r#"[1,[{"href":"/x","data-n":2,"id":"over","target":"_blank"}]]"#
+        r#"[[1,[[null,{"href":"/x","data-n":2,"id":"over","target":"_blank"}]]]]"#
     );
 }
 
@@ -214,8 +214,8 @@ export const order_seen = () => order;
             "[m.__tsx2rs_data_Page({ t: 'T', k: 7, rest: { n: 1, x: true } }), m.order_seen()]"
         ),
         concat!(
-            r#"[[[{"text":"T","n":2,"x":true,"key":7,"children":["a ","T"]},"<undefined>"],"#,
-            r#"[{"text":"T"},7],[{"children":"only"},"<undefined>"],"!"],"#,
+            r#"[[[null,[{"text":"T","n":2,"x":true,"key":7,"children":["a ","T"]},"<undefined>"],"#,
+            r#"[{"text":"T"},7],[{"children":"only"},"<undefined>"],"!"]],"#,
             r#"["text","key","child","text2","key2","after"]]"#
         )
     );
@@ -245,7 +245,7 @@ export const order_seen = () => order;
         ),
         concat!(
             r#"[[{"title":["T"],"children":["C"]},"<undefined>"],"#,
-            r#"[["T"],["C"]],["title","child"]]"#
+            r#"[[null,["T"],["C"]]],["title","child"]]"#
         )
     );
 }

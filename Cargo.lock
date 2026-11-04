@@ -1860,6 +1860,7 @@ name = "tsx2rs_differential"
 version = "0.0.0"
 dependencies = [
  "proptest",
+ "tsx2rs_compiler",
  "tsx2rs_engine",
  "tsx2rs_ir",
 ]

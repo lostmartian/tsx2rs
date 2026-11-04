@@ -55,10 +55,21 @@ fn folds_a_static_component_into_static_chunks() {
     let card = lowered(
         r#"export default () => <div className="card"><h1>Hello</h1>text{"more"}{42}</div>;"#,
     );
-    assert_eq!(
-        card.record,
-        vec![Slot::RootWrap, Slot::RootKey, Slot::RootWrap]
-    );
+    // The root element's key is the runtime's (ADR-0008), its static props folded.
+    let [
+        Slot::RootWrap,
+        Slot::Keyed {
+            root: true,
+            key: None,
+            record,
+            ..
+        },
+        Slot::RootWrap,
+    ] = card.record.as_slice()
+    else {
+        panic!("{:?}", card.record);
+    };
+    assert_eq!(record, &[]);
     assert_eq!(
         rendered(&card, |w| {
             root_open(w);
@@ -289,21 +300,18 @@ fn renders_the_tested_value_unless_nullish() {
 
 #[test]
 fn reads_components_and_element_values_as_children() {
-    // Until linking (C5), a component's element is a child the runtime renders; element values
-    // are children by design (ADR-0012).
+    // Element values are children by design (ADR-0012).
     let p = lowered(
         "import { Price } from './parts';\nexport default function C({ src }) { return <div><Price /><img src={src} /></div>; }",
     );
-    assert_eq!(
-        p.record.len(),
-        5,
-        "root wrap, key, two children, wrap: {:?}",
-        p.record
+    // Unlinked (`lower::component`), a component's element is a child the runtime renders.
+    let [_, Slot::Keyed { record, .. }, _] = p.record.as_slice() else {
+        panic!("root wrap, the `<div>`, wrap: {:?}", p.record);
+    };
+    assert!(
+        matches!(record.as_slice(), [Slot::Value { .. }, Slot::Value { .. }]),
+        "two children: {record:?}"
     );
-    assert!(matches!(
-        &p.record[2..4],
-        [Slot::Value { .. }, Slot::Value { .. }]
-    ));
 }
 
 #[test]

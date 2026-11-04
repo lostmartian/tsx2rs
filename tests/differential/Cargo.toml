@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 proptest.workspace = true
+tsx2rs_compiler.workspace = true
 tsx2rs_engine.workspace = true
 tsx2rs_ir.workspace = true
 

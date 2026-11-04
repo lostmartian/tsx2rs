@@ -11,6 +11,26 @@ Layer 4 of the [testing strategy](../../docs/engineering/testing.md): **React is
 - **Render twice:** the engine renders the program. The same tree goes to `oracle/oracle.ts`, which renders it with **React DOM's server** (`renderToString`) and **React's Flight server** (`react-server-dom-webpack`, under the `react-server` condition).
 - **Compare:** every tree is the body of a document (`<html><head></head><body>`) on both sides, and the whole document must be byte-identical (so hoisting into `<head>`, its order and deduplication are checked too), and the Flight must decode to the same tree, with the same resource hint rows (`:HL`, `:Hm`) in the same order (with the identity harness). A mismatch is shrunk to a minimal tree.
 
+## Component fixtures
+
+`tests/components.rs` is step 5's acceptance test (ADR-0012, ADR-0015). Each `components/*.tsx` is a page (its default export) and `export const cases`, its props, one object per case.
+- **Compile:** `src/components.rs` compiles the page (`lower::linked`) and generates the data functions.
+- **Run:** `oracle/components.ts` compiles both modules with the SWC Next.js uses, runs the data function, and resolves and encodes its record. This is the reference for the runtime (pending calls, key paths) and the encoder.
+- **Compare:** the engine renders the program, and the HTML and Flight payload must equal React DOM's and React Flight's for the original page.
+
+A fixture covers one area. Areas so far:
+- static markup and text separators
+- conditionals
+- lists and keys
+- React DOM's prop rules and spreads
+- several returns
+- linking
+- slots
+- recursion with `Call`
+- evaluation order and key precedence
+
+Pages that hoist into `<head>` are left to the generated trees above.
+
 ## Running
 
 ```bash

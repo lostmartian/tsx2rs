@@ -240,7 +240,9 @@ fn product_page_links() {
                         out.push(format!("slot {prop}"));
                     }
                 }
-                Slot::Placed { record, .. } => calls(graph, record, out),
+                Slot::Placed { record, .. } | Slot::Keyed { record, .. } => {
+                    calls(graph, record, out);
+                }
                 Slot::Branch {
                     then, otherwise, ..
                 } => {
