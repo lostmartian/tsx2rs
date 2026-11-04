@@ -8,6 +8,7 @@
 #![deny(missing_docs)]
 
 mod flight;
+pub mod fold;
 mod head;
 mod hints;
 mod html;

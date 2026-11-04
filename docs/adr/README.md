@@ -17,5 +17,6 @@ Format: [MADR](https://adr.github.io/madr/)-style. Context → Decision → Cons
 | [0009](0009-hoistables-in-place.md) | Hoistable elements rendered in place, and the document's elements inside the body | Accepted |
 | [0010](0010-hoisting-into-head.md) | Hoisting into `<head>`: the engine collects React's queues, the runtime places them | Accepted |
 | [0011](0011-flight-resource-hints.md) | Flight resource hints, and hinted elements always as element values | Accepted |
+| [0012](0012-compiling-templates.md) | Compiling templates: template trees, holes, folding through the engine | Accepted |
 
 Background research (benchmarks, spikes, the full decision history before this repository existed) lives in the separate `tsx2rs-lab` repository.
