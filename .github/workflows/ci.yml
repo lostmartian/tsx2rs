@@ -122,7 +122,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: All required jobs passed
+        # Every job must have succeeded: a job that never got a runner is "abandoned", and one
+        # skipped by a failed dependency is "skipped"; neither tested anything.
         run: |
           results='${{ toJSON(needs.*.result) }}'
           echo "$results"
-          if echo "$results" | grep -Eq '"(failure|cancelled)"'; then exit 1; fi
+          echo "$results" | jq -e 'all(. == "success")'
