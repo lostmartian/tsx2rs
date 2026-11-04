@@ -1,0 +1,12 @@
+# @tsx2rs/runtime
+
+What a compiled route runs at request time. Today that's encoding; the HTTP server comes with milestone 1's step 8.
+
+- **`@tsx2rs/runtime/encode`** ([ADR-0016](../../docs/adr/0016-generated-encoder.md)): the engine's input writer (`Input`), and the encoders the compiler's generated encoders call:
+  - one per hole kind: `node`, `primitive`, `style`, `attrs`, `value`
+  - `call`, which resolves a pending call as React's `jsx` does and runs the callee's data function
+  - `rootKey`, which puts React's key path in front of a root element's key
+
+  A value the engine can't take natively (a promise, a component element, a function, a `Date`) throws `NotNative`, where the route will hand it to React.
+
+Tested with `pnpm test` (unit tests, byte for byte) and end to end by the component fixtures in [`tests/differential`](../../tests/differential/README.md), which run every generated encoder against a reference and the engine's output against React.

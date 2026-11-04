@@ -6,7 +6,8 @@
  *
  *   node oracle/components.ts html
  *     {"op": "cases", "source"}                 → {"cases": number}
- *     {"op": "input", "data", "plan", "case"}   → {"input": hex} or {"error": string}
+ *     {"op": "input", "data", "encoder", "callees", "plan", "case"}
+ *                                               → {"input": hex} or {"error": string}
  *     {"op": "judge", "source", "case", "engineHtml", "engineFlight", "engineHints",
  *      "reactPayload"}                          → {"ok": true} or {"ok": false, …differences}
  *   node --conditions=react-server oracle/components.ts flight
@@ -19,9 +20,10 @@
  * The judge renders the page with React DOM and compares: the HTML byte for byte, and React's
  * Flight payload with the engine's hint rows then its model row (`0:…`), as one string.
  *
- * Resolving and encoding a record is the work of the runtime (step 8) and the generated encoder
- * (step 6). This is their reference, written from the record's contract (ADR-0012, ADR-0013,
- * ADR-0014) and React's rules for key paths (ADR-0008).
+ * `encoder` is the route's generated encoder (ADR-0016), run on `@tsx2rs/runtime/encode` with
+ * the data functions named in `callees`. The record is also resolved and encoded here, by a
+ * reference written from the record's contract (ADR-0012 to ADR-0015) and React's rules for key
+ * paths (ADR-0008) that interprets `plan`: the two must write the same bytes.
  */
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline";
@@ -208,8 +210,7 @@ function node(w: Input, v: unknown): void {
     for (const [name, prop] of entries) {
       w.string(name);
       if (name === "children") continue; // a marker: the node follows the last entry
-      if (name === "style") style(w, prop);
-      else primitive(w, prop);
+      value(w, prop); // tagged: a primitive, a style object, `{ __html }`, or an array
     }
     if ("children" in v.props) node(w, v.props["children"]);
   } else primitive(w, v);
@@ -341,6 +342,17 @@ async function input(dataSource: string, plan: Plan, props: unknown): Promise<st
   return w.hex();
 }
 
+type Encode = (record: unknown[], data: unknown[]) => Uint8Array;
+
+/** The input the generated encoder writes for the entry's record. */
+async function encode(request: Request, props: unknown): Promise<string> {
+  const data = await load(request.data);
+  const encoder = await load(request.encoder);
+  const fn = data[request.plan.entry] as DataFunction;
+  const callees = request.callees.map((name) => data[name]);
+  return Buffer.from((encoder["encode"] as Encode)(fn(props), callees)).toString("hex");
+}
+
 interface React {
   createElement(type: unknown, props: unknown): unknown;
 }
@@ -378,6 +390,8 @@ interface Request {
   op: "cases" | "input" | "judge" | "flight";
   source: string;
   data: string;
+  encoder: string;
+  callees: string[];
   plan: Plan;
   case: number;
   engineHtml: string;
@@ -393,7 +407,16 @@ async function answer(request: Request): Promise<object> {
         return { cases: (await cases(request.source)).length };
       case "input": {
         const props = (await cases(request.source))[request.case];
-        return { input: await input(request.data, request.plan, props) };
+        const reference = await input(request.data, request.plan, props);
+        const generated = await encode(request, props);
+        if (generated !== reference) {
+          return {
+            error: "the generated encoder differs from the reference",
+            generated,
+            reference,
+          };
+        }
+        return { input: generated };
       }
       case "judge": {
         const server = require("react-dom/server") as {

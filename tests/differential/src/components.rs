@@ -1,6 +1,7 @@
 //! Component fixtures (ADR-0012, section 6), step 5's acceptance test: a small `.tsx` component
 //! is compiled (template program, records, data functions), its data functions are run in
-//! Node.js and their records encoded (`oracle/components.ts`), the program is rendered by the
+//! Node.js and their records encoded by the generated encoder (`compiler::encoder`) and, as a
+//! cross-check, by a reference (`oracle/components.ts`), the program is rendered by the
 //! engine, and the result is compared with React rendering the original component: HTML byte
 //! for byte, Flight payload equal.
 
@@ -27,6 +28,10 @@ pub struct Compiled {
     pub plan: String,
     /// The fixture's source with its data functions.
     pub data: String,
+    /// The generated encoder (ADR-0016).
+    pub encoder: String,
+    /// The data functions the encoder's `data` array holds, by name, in order.
+    pub callees: Vec<String>,
 }
 
 /// Compiles a fixture: `source` is the page's module (`app/page.tsx`), its default export the
@@ -72,10 +77,18 @@ pub fn compile(source: &str) -> Result<Compiled, String> {
         plan.record(&mut json, record, true);
     }
     json.push_str("]}");
+    let encoder = tsx2rs_compiler::encoder::generate(&lowered);
+    let callees = encoder
+        .callees
+        .iter()
+        .map(|(m, i)| data::name(&graph.modules[m.0].components[*i]))
+        .collect();
     Ok(Compiled {
         program: lowered.program,
         plan: json,
         data,
+        encoder: encoder.source,
+        callees,
     })
 }
 
@@ -259,7 +272,16 @@ impl Fixtures {
         json_string(&mut request, source);
         request.push_str(r#","data":"#);
         json_string(&mut request, &compiled.data);
-        let _ = write!(request, r#","plan":{},"case":{case}}}"#, compiled.plan);
+        request.push_str(r#","encoder":"#);
+        json_string(&mut request, &compiled.encoder);
+        request.push_str(r#","callees":["#);
+        for (i, name) in compiled.callees.iter().enumerate() {
+            if i > 0 {
+                request.push(',');
+            }
+            json_string(&mut request, name);
+        }
+        let _ = write!(request, r#"],"plan":{},"case":{case}}}"#, compiled.plan);
         let response = self.ask_html(&request)?;
         let hex = field(&response, "input")
             .map(|h| h.trim_matches('"').to_owned())

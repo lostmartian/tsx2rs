@@ -43,8 +43,9 @@ Source → templates + data functions → programs, in phases with one module ea
 3. **Component usage:** server, client and React built-in components (`"use client"`, re-exports)
 4. **Templates** (`template`): each server component's JSX in template positions becomes a template tree of static parts and holes (props, children, conditionals, lists, component calls, element values; [ADR-0012](docs/adr/0012-compiling-templates.md)); other JSX stays real JSX and becomes an element value at runtime
 5. **Data functions** (`data`): span-based rewriting of the component's own code, with each returned template replaced by the JavaScript that builds its record (values, props objects, `[taken, [record]]` branches with the test evaluated once, the component's own `.map` calls, `[index, record]` for several returns)
-6. **Linking** (`lower::linked`): child server components inlined into the caller's program, their data as pending calls (ADR-0013); slots (JSX props and children a callee only places) lowered where the callee places them, and `Call` to a template of its own for recursion (ADR-0014); template nodes for runtime components come with the encoder *(planned)*
-7. **Lowering** (`lower`) to programs, with static parts folded by the engine, and each component's **record**: the values its data function writes, in program order (ADR-0015 for its final shape); the **encoder** comes from the same traversal *(planned; `tests/differential/oracle/components.ts` is its reference)*
+6. **Linking** (`lower::linked`): child server components inlined into the caller's program, their data as pending calls (ADR-0013); slots (JSX props and children a callee only places) lowered where the callee places them, and `Call` to a template of its own for recursion (ADR-0014); template nodes for runtime components come with the runtime's component table *(planned)*
+7. **Lowering** (`lower`) to programs, with static parts folded by the engine, and each component's **record**: the values its data function writes, in program order (ADR-0015 for its final shape)
+8. **Encoder** (`encoder`): JavaScript generated from the same `Slot` trees, one straight-line function per template, that writes the records as the engine's input on `@tsx2rs/runtime/encode` ([ADR-0016](docs/adr/0016-generated-encoder.md)); the component fixtures check it against a reference and against React
 
 Each phase is a pure function of its input. Its **diagnostics** have a stable code, a message, a source span and a severity: an *error* makes the route fall back, and a *note* names a part that React renders at request time. The compiler never guesses.
 
@@ -66,12 +67,14 @@ The only bridge to Node.js (napi-rs). Thin: converts arguments, calls `compiler`
 - **During the build,** a bundler transform (registered in `modifyConfig`) adds each server module's generated data functions to Next.js's own bundle, next to the unchanged original code.
 - **In `onBuildComplete`,** it links each route's programs, captures Next.js's wrapper (document, router tree, layout payload), and writes the **manifest**: versioned JSON listing routes, programs, wrapper templates and fallback reasons.
 
-### `packages/runtime` *(planned)*
-`@tsx2rs/runtime`: the HTTP server.
+### `packages/runtime`
+`@tsx2rs/runtime`: what runs at request time.
+- **Encoding** (`encode`, [ADR-0016](docs/adr/0016-generated-encoder.md)): the input writer, an encoder per hole kind, pending calls and key paths, for the generated encoders; values the engine can't take natively are `NotNative`, for the hand-off to React
+
+The HTTP server is *planned* (step 8):
 - Routing (`@next/routing`, the same resolver Next.js uses)
 - Fallback to Next.js handlers
 - Running each route's setup code
-- Encoding
 - The island cache with context-aware keys
 - Streaming of `<Suspense>` boundaries
 - Image optimization

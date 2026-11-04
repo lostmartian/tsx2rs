@@ -1,5 +1,5 @@
 // Keys: a keyed element returned through a conditional at a component's root (React's key path
-// and implicit slot), a host element's key after a spread (`createElement`, evaluated in
+// and implicit slot), the key path through a component that returns another, a host element's key after a spread (`createElement`, evaluated in
 // place), a dynamic key without a spread (evaluated after the props), and a `key` inside a
 // spread on a host element (React takes it as the key).
 let log: string[] = [];
@@ -9,6 +9,9 @@ const seen = (name: string, value: string) => {
 };
 function Pick({ a }: { a: boolean }) {
   return a ? <b key="picked">yes</b> : <i>no</i>;
+}
+function Outer({ a }: { a: boolean }) {
+  return <Pick a={a} />;
 }
 function Report() {
   const order = log.join(",");
@@ -21,6 +24,7 @@ export default function Page({ a, rest }: { a: boolean; rest: Record<string, unk
     <div>
       <Pick a={a} />
       <Pick key="outer" a={a} />
+      <Outer key="o" a={a} />
       <ul>
         {["x", "y"].map((k) => (
           <li title={seen("title " + k, k)} {...rest} key={seen("key " + k, k)}>

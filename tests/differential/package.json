@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@tsx2rs/identity": "workspace:*",
+    "@tsx2rs/runtime": "workspace:*",
     "next": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
