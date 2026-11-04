@@ -7,6 +7,7 @@
 #![deny(missing_docs)]
 
 pub mod component;
+pub mod data;
 pub mod diagnostic;
 pub mod graph;
 pub mod lower;

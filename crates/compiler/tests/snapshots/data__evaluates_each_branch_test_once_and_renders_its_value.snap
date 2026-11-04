@@ -1,0 +1,10 @@
+---
+source: crates/compiler/tests/data.rs
+expression: module
+---
+
+// tsx2rs data functions (generated): each returns its template's record.
+const __tsx2rs_key = (key) => (key === undefined ? null : "" + key);
+export const __tsx2rs_data_C = function C({ a, v }) {
+  return [((__tsx2rs_t0) => (__tsx2rs_t0 ? [true, [(a)]] : [false, [__tsx2rs_t0]]))(count(a)), ((__tsx2rs_t0) => (__tsx2rs_t0 != null ? [true, [__tsx2rs_t0]] : [false, []]))(v), ((__tsx2rs_t0) => (__tsx2rs_t0 ? [true, []] : [false, []]))(a)];
+};
