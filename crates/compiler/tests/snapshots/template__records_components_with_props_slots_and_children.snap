@@ -1,0 +1,15 @@
+---
+source: crates/compiler/tests/template.rs
+expression: "templates(r#\"\nimport { Price, ui } from \"./parts\";\nexport default function Page({ amount, rest }) {\n  return (\n    <div>\n      <Price key=\"p\" amount={amount} currency=\"USD\" {...rest} icon={<svg><path d=\"M0\" /></svg>} />\n      <ui.Card>\n        <h2>Title</h2>\n        {amount}\n      </ui.Card>\n    </div>\n  );\n}\n\"#)"
+---
+component Page default
+  return 0:
+    <div>
+      component <Price key="p" amount={amount} currency="USD" {...rest}>
+        slot icon:
+          <svg>
+            <path d="M0">
+      component <ui.Card>
+        <h2>
+          text "Title"
+        hole {amount}

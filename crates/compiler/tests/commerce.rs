@@ -100,3 +100,88 @@ fn product_page() {
 fn product_streaming_page() {
     insta::assert_snapshot!(describe("app/product-streaming/[handle]/page.tsx"));
 }
+
+/// Every server component of the product page's modules: its returns and what its templates hold,
+/// counted by kind.
+fn templates(entry: &str) -> String {
+    use tsx2rs_compiler::template::{ComponentProp, Node};
+    #[derive(Default)]
+    struct Counts {
+        elements: usize,
+        texts: usize,
+        holes: usize,
+        conditionals: usize,
+        lists: usize,
+        components: usize,
+        element_values: Vec<String>,
+    }
+    fn count(node: &Node, c: &mut Counts) {
+        match node {
+            Node::Element(e) => {
+                c.elements += 1;
+                e.children.iter().for_each(|n| count(n, c));
+            }
+            Node::Text(_) | Node::Number(_) | Node::Literal(_) => c.texts += 1,
+            Node::Fragment(children) => children.iter().for_each(|n| count(n, c)),
+            Node::Hole(_) => c.holes += 1,
+            Node::Conditional(cond) => {
+                c.conditionals += 1;
+                count(&cond.consequent, c);
+                if let Some(alternate) = &cond.alternate {
+                    count(alternate, c);
+                }
+            }
+            Node::List(list) => {
+                c.lists += 1;
+                list.item.iter().for_each(|t| count(&t.root, c));
+            }
+            Node::Component(component) => {
+                c.components += 1;
+                for prop in &component.props {
+                    if let ComponentProp::Slot { template, .. } = prop {
+                        count(template, c);
+                    }
+                }
+                component.children.iter().for_each(|n| count(n, c));
+            }
+            Node::ElementValue(v) => c.element_values.push(format!("{:?}", v.reason)),
+        }
+    }
+    let graph = build(&app(), Path::new(entry)).unwrap();
+    let mut out = String::new();
+    for diagnostic in &graph.diagnostics {
+        writeln!(out, "! {diagnostic}").unwrap();
+    }
+    for module in graph.modules.iter().filter(|m| !m.components.is_empty()) {
+        writeln!(out, "{}", module.path).unwrap();
+        for component in &module.components {
+            let mut c = Counts::default();
+            component
+                .returns
+                .iter()
+                .for_each(|t| count(&t.root, &mut c));
+            writeln!(
+                out,
+                "  {}{}{}: {} returns; {} elements, {} static, {} holes, {} conditionals, {} lists, {} components, element values {:?}",
+                component.name.as_deref().unwrap_or("(default)"),
+                if component.is_async { " async" } else { "" },
+                if component.uses_hooks { " hooks" } else { "" },
+                component.returns.len(),
+                c.elements,
+                c.texts,
+                c.holes,
+                c.conditionals,
+                c.lists,
+                c.components,
+                c.element_values,
+            )
+            .unwrap();
+        }
+    }
+    out
+}
+
+#[test]
+fn product_page_templates() {
+    insta::assert_snapshot!(templates("app/product/[handle]/page.tsx"));
+}

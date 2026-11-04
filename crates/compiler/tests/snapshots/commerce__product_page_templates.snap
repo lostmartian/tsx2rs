@@ -1,0 +1,23 @@
+---
+source: crates/compiler/tests/commerce.rs
+expression: "templates(\"app/product/[handle]/page.tsx\")"
+---
+app/product/[handle]/page.tsx
+  ProductPage async: 2 returns; 5 elements, 0 static, 1 holes, 0 conditionals, 0 lists, 6 components, element values ["Hoistable"]
+  RelatedProducts async: 2 returns; 4 elements, 2 static, 0 holes, 0 conditionals, 1 lists, 2 components, element values []
+components/grid/tile.tsx
+  GridTileImage: 1 returns; 1 elements, 2 static, 0 holes, 2 conditionals, 0 lists, 2 components, element values []
+components/layout/footer.tsx
+  Footer async: 1 returns; 24 elements, 10 static, 3 holes, 1 conditionals, 0 lists, 4 components, element values []
+components/product/product-description.tsx
+  ProductDescription: 1 returns; 3 elements, 1 static, 1 holes, 1 conditionals, 0 lists, 4 components, element values []
+components/label.tsx
+  Label: 1 returns; 3 elements, 0 static, 1 holes, 0 conditionals, 0 lists, 1 components, element values []
+components/logo-square.tsx
+  LogoSquare: 1 returns; 1 elements, 0 static, 0 holes, 0 conditionals, 0 lists, 1 components, element values []
+components/price.tsx
+  Price: 1 returns; 2 elements, 0 static, 2 holes, 0 conditionals, 0 lists, 0 components, element values []
+components/prose.tsx
+  Prose: 1 returns; 0 elements, 0 static, 0 holes, 0 conditionals, 0 lists, 0 components, element values ["Content"]
+components/icons/logo.tsx
+  LogoIcon: 1 returns; 3 elements, 0 static, 0 holes, 0 conditionals, 0 lists, 0 components, element values []

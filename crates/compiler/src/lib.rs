@@ -9,6 +9,7 @@
 pub mod component;
 pub mod diagnostic;
 pub mod graph;
+pub mod template;
 pub mod usage;
 
 /// The template-program format version this compiler emits.

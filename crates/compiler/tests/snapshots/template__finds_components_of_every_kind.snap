@@ -1,0 +1,28 @@
+---
+source: crates/compiler/tests/template.rs
+expression: "templates(r#\"\nfunction Plain() { return <p>a</p>; }\nexport function Named() { return <p>b</p>; }\nexport default async function Page() { return <p>c</p>; }\nconst Arrow = () => <p>d</p>;\nexport const Exported = async () => { return <p>e</p>; };\nconst Expr = function () { return <p>f</p>; };\nfunction helper() { return <p>not a component</p>; }\nconst lower = () => <p>not a component either</p>;\n\"#)"
+---
+component Plain
+  return 0:
+    <p>
+      text "a"
+component Named
+  return 0:
+    <p>
+      text "b"
+component Page default async
+  return 0:
+    <p>
+      text "c"
+component Arrow
+  return 0:
+    <p>
+      text "d"
+component Exported async
+  return 0:
+    <p>
+      text "e"
+component Expr
+  return 0:
+    <p>
+      text "f"

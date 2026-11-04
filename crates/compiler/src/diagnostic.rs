@@ -16,6 +16,8 @@ pub enum Code {
     DynamicImport,
     /// A component element whose component can't be classified as server, client or built-in.
     UnknownComponent,
+    /// JSX the compiler can't compile (spread children, `this` as a tag).
+    UnsupportedJsx,
 }
 
 impl Code {
@@ -27,6 +29,7 @@ impl Code {
             Self::UnresolvedImport => "TSX2RS_E0002",
             Self::DynamicImport => "TSX2RS_E0003",
             Self::UnknownComponent => "TSX2RS_E0004",
+            Self::UnsupportedJsx => "TSX2RS_E0005",
         }
     }
 }
