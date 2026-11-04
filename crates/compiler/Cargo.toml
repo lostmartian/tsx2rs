@@ -18,6 +18,7 @@ oxc_span.workspace = true
 oxc_syntax.workspace = true
 ryu-js.workspace = true
 thiserror.workspace = true
+tsx2rs_engine.workspace = true
 tsx2rs_ir.workspace = true
 
 [dev-dependencies]

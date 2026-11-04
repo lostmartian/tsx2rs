@@ -174,3 +174,25 @@ proptest! {
         prop_assert_eq!(flight, expected_flight);
     }
 }
+
+#[test]
+fn folds_element_edges_and_keys() {
+    let div = fold::tag("div").unwrap();
+    assert_eq!(div.html_open, b"<div");
+    assert_eq!(div.html_close, b"</div>");
+    assert!(!div.void);
+    assert_eq!(div.flight_open, br#"["$","div","#);
+    let br = fold::tag("br").unwrap();
+    assert_eq!(br.html_close, b"/>");
+    assert!(br.void);
+    assert!(fold::tag("my-element").is_ok());
+    for name in [
+        "input", "img", "title", "select", "textarea", "1x", "a b", "",
+    ] {
+        assert_eq!(fold::tag(name), Err(FoldError::NotGeneric), "{name:?}");
+    }
+    assert_eq!(fold::key(None), b"null");
+    assert_eq!(fold::key(Some("$k")), br#""$$k""#);
+    assert_eq!(fold::key(Some("a\"b")), br#""a\"b""#);
+    assert_eq!(fold::prop_key("$x"), br#""$x":"#);
+}

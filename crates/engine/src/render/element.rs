@@ -1302,6 +1302,20 @@ fn single_child_text(
 }
 
 /// React's `VALID_TAG_REGEX`: `/^[a-zA-Z][a-zA-Z:_\.\-\d]*$/`.
+/// For build-time folding: whether React DOM writes `element` with the generic rules (and so the
+/// compiler may write it as template markup), and if so whether it's void. `None` for an invalid
+/// tag or one with rules of its own.
+pub(crate) fn generic_element(element: &str) -> Option<bool> {
+    if !is_valid_tag(element) {
+        return None;
+    }
+    match Kind::of(element) {
+        Kind::Generic(_) => Some(false),
+        Kind::Void => Some(true),
+        _ => None,
+    }
+}
+
 fn is_valid_tag(element: &str) -> bool {
     let mut bytes = element.bytes();
     bytes.next().is_some_and(|b| b.is_ascii_alphabetic())
