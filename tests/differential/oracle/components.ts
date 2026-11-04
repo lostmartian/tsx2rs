@@ -1,29 +1,32 @@
 /**
- * The Node.js half of the component fixtures (ADR-0012, section 6): a compiled component's data
- * functions are run here, their records resolved and encoded as the engine's input, and React
+ * The Node.js half of the component fixtures (ADR-0012 section 6, ADR-0015): a compiled
+ * component's data functions are run here, their records encoded as the engine's input, and React
  * renders the original component for comparison. One JSON request per line on stdin, one JSON
  * response per line on stdout:
  *
  *   node oracle/components.ts html
- *     {"op": "cases", "source"}                 → {"cases": number}
- *     {"op": "input", "data", "encoder", "callees", "plan", "case"}
- *                                               → {"input": hex} or {"error": string}
- *     {"op": "judge", "source", "case", "engineHtml", "engineFlight", "engineHints",
- *      "reactPayload"}                          → {"ok": true} or {"ok": false, …differences}
+ *     {"op": "cases", "cases"}                              → {"cases": number}
+ *     {"op": "input", "data", "encoder", "callees", "plan", "cases", "case"}
+ *                                                           → {"input": hex} or {"error": …}
+ *     {"op": "judge", "modules", "page", "cases", "case", "engineHtml", "engineFlight",
+ *      "engineHints", "reactPayload"}                       → {"ok": true} or {"ok": false, …}
  *   node --conditions=react-server oracle/components.ts flight
- *     {"op": "flight", "source", "case"}        → {"payload": string} or {"error": string}
+ *     {"op": "flight", "modules", "page", "cases", "case"}  → {"payload": string} or {"error"}
  *
- * `source` is a fixture (`.tsx`): its default export is the page, and `export const cases` its
- * props, one object per case. `data` is the module the compiler generated: the fixture's source
- * with its data functions appended. Both are compiled with the SWC Next.js uses.
+ * `modules` is a module graph: each server module's source and where its imports lead (the
+ * compiler's module graph resolved them). `data` is the same graph with each module's data
+ * functions appended. Both are compiled with the SWC Next.js uses; imports outside the graph
+ * are packages, loaded from this folder's `node_modules`. `page` names the component React
+ * renders (`{module, export}`), and `cases` where its props come from: an export of a module of
+ * the graph, or of a file (`{file, export}`).
  *
  * The judge renders the page with React DOM and compares: the HTML byte for byte, and React's
  * Flight payload with the engine's hint rows then its model row (`0:…`), as one string.
  *
- * `encoder` is the route's generated encoder (ADR-0016), run on `@tsx2rs/runtime/encode` with
- * the data functions named in `callees`. The record is also resolved and encoded here, by a
- * reference written from the record's contract (ADR-0012 to ADR-0015) and React's rules for key
- * paths (ADR-0008) that interprets `plan`: the two must write the same bytes.
+ * `encoder` is the route's generated encoder (ADR-0016), run on `@tsx2rs/runtime/encode` with the
+ * data functions `callees` names (`{module, name}`). The record is also resolved and encoded here,
+ * by a reference written from the record's contract (ADR-0012 to ADR-0015) and React's rules for
+ * key paths (ADR-0008) that interprets `plan`: the two must write the same bytes.
  */
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline";
@@ -40,11 +43,20 @@ type Slot =
   | { r: Slot[][] }
   | { k: boolean; body: Slot[] }
   | { rw: 1 }
-  | { c: string; root: boolean; body?: Slot[]; t?: number; slots: Record<string, Slot[]> }
+  | {
+      /** The callee's module and data function. */
+      m: string;
+      c: string;
+      root: boolean;
+      body?: Slot[];
+      t?: number;
+      slots: Record<string, Slot[]>;
+    }
   | { pl: Slot[] };
 
 interface Plan {
-  /** The entry's data function. */
+  /** The entry's data function: its module, and its name. */
+  module: string;
   entry: string;
   record: Slot[];
   /** The records of templates 1.. (`Op::Call`). */
@@ -53,21 +65,32 @@ interface Plan {
 
 type Module = Record<string, unknown>;
 type DataFunction = (props: unknown) => unknown[];
+/** A module graph: by path, the module's source and where its imports lead. */
+type Graph = Record<string, { source: string; imports: Record<string, string> }>;
+/** A component: its module and its export. */
+interface Named {
+  module: string;
+  export: string;
+}
+/** Where a case's props come from. */
+type Cases = Named | { file: string; export: string };
 
 interface Swc {
   loadBindings?: () => Promise<void>;
   transform(source: string, options: object): Promise<{ code: string }>;
 }
 const swc = require("next/dist/build/swc/index.js") as Swc;
-const modules = new Map<string, Module>();
+const compiled = new Map<string, string>();
+const graphs = new Map<string, Map<string, Module>>();
 
-/** Compiles a module with Next.js's SWC (TSX, React's automatic runtime) and runs it. */
-async function load(source: string): Promise<Module> {
-  const cached = modules.get(source);
-  if (cached) return cached;
+/** Compiles a module with Next.js's SWC (TSX, React's automatic runtime) to CommonJS. */
+async function compile(source: string, path: string): Promise<string> {
+  const key = `${path}\0${source}`;
+  const cached = compiled.get(key);
+  if (cached !== undefined) return cached;
   await swc.loadBindings?.();
   const { code } = await swc.transform(source, {
-    filename: "page.tsx",
+    filename: path,
     jsc: {
       parser: { syntax: "typescript", tsx: true },
       transform: { react: { runtime: "automatic", development: false } },
@@ -75,22 +98,67 @@ async function load(source: string): Promise<Module> {
     },
     module: { type: "commonjs" },
   });
-  const module = { exports: {} as Module };
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval -- the fixture's own code
-  const run = new Function("require", "module", "exports", code) as (
-    require: NodeJS.Require,
-    module: { exports: Module },
-    exports: Module,
-  ) => void;
-  run(require, module, module.exports);
-  modules.set(source, module.exports);
-  return module.exports;
+  compiled.set(key, code);
+  return code;
 }
 
-async function cases(source: string): Promise<unknown[]> {
-  const loaded = await load(source);
-  if (!Array.isArray(loaded["cases"])) throw new Error("the fixture has no `export const cases`");
-  return loaded["cases"] as unknown[];
+/** Client components from packages, as the compiler knows them (`usage::CLIENT_PACKAGE_EXPORTS`). */
+const CLIENT_PACKAGES = new Set(["next/image", "next/link"]);
+const flightMode = process.argv[2] === "flight";
+
+/** A package import. Under the `react-server` condition, a client component package is a client
+ * reference, as Next.js bundles it for React's Flight server. */
+function external(specifier: string): unknown {
+  if (!flightMode || !CLIENT_PACKAGES.has(specifier)) return require(specifier);
+  const server = require("react-server-dom-webpack/server") as {
+    registerClientReference(proxy: unknown, id: string, name: string): unknown;
+  };
+  const proxy = () => {
+    throw new Error(`${specifier} is a client component`);
+  };
+  return { __esModule: true, default: server.registerClientReference(proxy, specifier, "default") };
+}
+
+/** Runs a module graph's `path` (and what it imports), each module once per graph. */
+async function load(graph: Graph, path: string): Promise<Module> {
+  const id = JSON.stringify(graph);
+  let loaded = graphs.get(id);
+  if (!loaded) {
+    loaded = new Map();
+    graphs.set(id, loaded);
+  }
+  const code = new Map<string, string>();
+  for (const [p, m] of Object.entries(graph)) code.set(p, await compile(m.source, p));
+  const instances = loaded;
+  const run = (p: string): Module => {
+    const done = instances.get(p);
+    if (done) return done;
+    const module = { exports: {} as Module };
+    instances.set(p, module.exports);
+    const imports = graph[p]?.imports ?? {};
+    const local = (specifier: string): unknown => {
+      const target = imports[specifier];
+      return target === undefined ? external(specifier) : run(target);
+    };
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval -- the fixture's own code
+    const body = new Function("require", "module", "exports", code.get(p) ?? "") as (
+      require: (specifier: string) => unknown,
+      module: { exports: Module },
+      exports: Module,
+    ) => void;
+    body(local, module, module.exports);
+    return module.exports;
+  };
+  if (!(path in graph)) throw new Error(`${path} isn't in the module graph`);
+  return run(path);
+}
+
+async function cases(graph: Graph, from: Cases): Promise<unknown[]> {
+  const exports: Module =
+    "file" in from ? ((await import(from.file)) as Module) : await load(graph, from.module);
+  const list = exports[from.export];
+  if (!Array.isArray(list)) throw new Error(`no cases in \`${from.export}\``);
+  return list as unknown[];
 }
 
 /** The engine's input format (`tsx2rs_ir::input`). */
@@ -241,11 +309,11 @@ function jsxArguments(config: Record<string, unknown>, key: unknown): [string | 
  * child after its parent, depth first.
  */
 class Resolver {
-  private readonly data: Module;
+  private readonly data: Map<string, Module>;
   private readonly plan: Plan;
   private readonly w: Input;
 
-  constructor(data: Module, plan: Plan, w: Input) {
+  constructor(data: Map<string, Module>, plan: Plan, w: Input) {
     this.data = data;
     this.plan = plan;
     this.w = w;
@@ -321,8 +389,8 @@ class Resolver {
               implicit: outer.implicit,
             }
           : { path: outer.path, implicit: outer.path === null ? true : outer.implicit };
-      const fn = this.data[slot.c] as DataFunction | undefined;
-      if (typeof fn !== "function") throw new Error(`no data function ${slot.c}`);
+      const fn = this.data.get(slot.m)?.[slot.c] as DataFunction | undefined;
+      if (typeof fn !== "function") throw new Error(`no data function ${slot.m}: ${slot.c}`);
       const body = slot.body ?? this.plan.templates[(slot.t ?? 1) - 1] ?? [];
       this.record(body, fn(props), callee);
     } else if ("pl" in slot) {
@@ -332,42 +400,67 @@ class Resolver {
   }
 }
 
-async function input(dataSource: string, plan: Plan, props: unknown): Promise<string> {
-  const data = await load(dataSource);
-  const fn = data[plan.entry] as DataFunction | undefined;
-  if (typeof fn !== "function") throw new Error(`no data function ${plan.entry}`);
+/** The data graph's modules a record needs: the entry's and its callees' (what they import is
+ * loaded as they require it). */
+async function dataModules(data: Graph, paths: string[]): Promise<Map<string, Module>> {
+  const modules = new Map<string, Module>();
+  for (const path of paths) modules.set(path, await load(data, path));
+  return modules;
+}
+
+function needed(request: Request): string[] {
+  return [request.plan.module, ...request.callees.map((c) => c.module)];
+}
+
+function entry(modules: Map<string, Module>, plan: Plan): DataFunction {
+  const fn = modules.get(plan.module)?.[plan.entry] as DataFunction | undefined;
+  if (typeof fn !== "function") throw new Error(`no data function ${plan.module}: ${plan.entry}`);
+  return fn;
+}
+
+/** The reference: the plan interpreted. */
+async function reference(request: Request, props: unknown): Promise<string> {
+  const { data, plan } = request;
+  const modules = await dataModules(data, needed(request));
   const w = new Input();
   // Next.js renders a page as an unkeyed function component.
-  new Resolver(data, plan, w).record(plan.record, fn(props), { path: null, implicit: true });
+  new Resolver(modules, plan, w).record(plan.record, entry(modules, plan)(props), {
+    path: null,
+    implicit: true,
+  });
   return w.hex();
 }
 
 type Encode = (record: unknown[], data: unknown[]) => Uint8Array;
 
-/** The input the generated encoder writes for the entry's record. */
-async function encode(request: Request, props: unknown): Promise<string> {
-  const data = await load(request.data);
-  const encoder = await load(request.encoder);
-  const fn = data[request.plan.entry] as DataFunction;
-  const callees = request.callees.map((name) => data[name]);
-  return Buffer.from((encoder["encode"] as Encode)(fn(props), callees)).toString("hex");
+/** The generated encoder, run on `@tsx2rs/runtime/encode`. */
+async function generated(request: Request, props: unknown): Promise<string> {
+  const modules = await dataModules(request.data, needed(request));
+  const encoder = await load(
+    { "encoder.js": { source: request.encoder, imports: {} } },
+    "encoder.js",
+  );
+  const callees = request.callees.map((c) => modules.get(c.module)?.[c.export]);
+  const record = entry(modules, request.plan)(props);
+  return Buffer.from((encoder["encode"] as Encode)(record, callees)).toString("hex");
 }
 
 interface React {
   createElement(type: unknown, props: unknown): unknown;
 }
 
-async function page(source: string, index: number): Promise<unknown> {
-  const loaded = await load(source);
+async function page(request: Request): Promise<unknown> {
+  const loaded = await load(request.modules, request.page.module);
   const react = require("react") as React;
-  return react.createElement(loaded["default"], (await cases(source))[index]);
+  const props = (await cases(request.modules, request.cases))[request.case];
+  return react.createElement(loaded[request.page.export], props);
 }
 
-async function flight(source: string, index: number): Promise<string> {
+async function flight(request: Request): Promise<string> {
   const server = require("react-server-dom-webpack/server") as {
     renderToPipeableStream(model: unknown, webpackMap: null): { pipe(w: Writable): void };
   };
-  const element = await page(source, index);
+  const element = await page(request);
   const chunks: Buffer[] = [];
   await new Promise<void>((resolve, reject) => {
     const sink = new Writable({
@@ -388,12 +481,14 @@ async function flight(source: string, index: number): Promise<string> {
 
 interface Request {
   op: "cases" | "input" | "judge" | "flight";
-  source: string;
-  data: string;
-  encoder: string;
-  callees: string[];
-  plan: Plan;
+  modules: Graph;
+  data: Graph;
+  page: Named;
+  cases: Cases;
   case: number;
+  encoder: string;
+  callees: Named[];
+  plan: Plan;
   engineHtml: string;
   engineFlight: string;
   engineHints: string;
@@ -404,36 +499,37 @@ async function answer(request: Request): Promise<object> {
   try {
     switch (request.op) {
       case "cases":
-        return { cases: (await cases(request.source)).length };
+        return { cases: (await cases(request.modules, request.cases)).length };
       case "input": {
-        const props = (await cases(request.source))[request.case];
-        const reference = await input(request.data, request.plan, props);
-        const generated = await encode(request, props);
-        if (generated !== reference) {
+        const props = (await cases(request.modules, request.cases))[request.case];
+        const ours = await generated(request, props);
+        const theirs = await reference(request, props);
+        if (ours !== theirs) {
           return {
             error: "the generated encoder differs from the reference",
-            generated,
-            reference,
+            generated: ours,
+            reference: theirs,
           };
         }
-        return { input: generated };
+        return { input: ours };
       }
       case "judge": {
         const server = require("react-dom/server") as {
           renderToString: (element: unknown) => string;
         };
-        const html = server.renderToString(await page(request.source, request.case));
+        const html = server.renderToString(await page(request));
         const engineFlight = `${request.engineHints}0:${request.engineFlight}\n`;
         const verdict: Record<string, unknown> = {};
-        if (html !== request.engineHtml)
+        if (html !== request.engineHtml) {
           verdict["html"] = { react: html, engine: request.engineHtml };
+        }
         if (request.reactPayload !== engineFlight) {
           verdict["flight"] = { react: request.reactPayload, engine: engineFlight };
         }
         return Object.keys(verdict).length === 0 ? { ok: true } : { ok: false, ...verdict };
       }
       case "flight":
-        return { payload: await flight(request.source, request.case) };
+        return { payload: await flight(request) };
     }
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };

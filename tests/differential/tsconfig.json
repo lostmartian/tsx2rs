@@ -5,5 +5,5 @@
     "allowImportingTsExtensions": true,
     "jsx": "react-jsx"
   },
-  "include": ["oracle", "components"]
+  "include": ["oracle", "components", "commerce"]
 }

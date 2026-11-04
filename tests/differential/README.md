@@ -31,6 +31,14 @@ A fixture covers one area. Areas so far:
 
 Pages that hoist into `<head>` are left to the generated trees above.
 
+**Commerce's own components** (`tests/commerce.rs`, step 6's round trip, ADR-0016) go through the same pipeline, compiled from the app's module graph. Props come from every product in its test data (`commerce/cases.ts`). Covered:
+- `Price`
+- `Label`, which links `Price` across modules
+- `Prose`
+- `GridTileImage` without an image, which links `Label` → `Price`
+
+With an image, `GridTileImage` reaches `next/image`, a client component. The test checks that the encoder stops there with `NotNative`, where the runtime will hand it to React (step 8). Under the `react-server` condition, the oracle loads client component packages as client references, as Next.js bundles them.
+
 ## Running
 
 ```bash
