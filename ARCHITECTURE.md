@@ -43,7 +43,7 @@ Source → templates + data functions → programs, in phases with one module ea
 3. **Component usage:** server, client and React built-in components (`"use client"`, re-exports)
 4. **Templates** (`template`): each server component's JSX in template positions becomes a template tree of static parts and holes (props, children, conditionals, lists, component calls, element values; [ADR-0012](docs/adr/0012-compiling-templates.md)); other JSX stays real JSX and becomes an element value at runtime
 5. **Data functions** (`data`): span-based rewriting of the component's own code, with each returned template replaced by the JavaScript that builds its record (values, props objects, `[taken, [record]]` branches with the test evaluated once, the component's own `.map` calls, `[index, record]` for several returns)
-6. **Linking:** child components, slots, and `Call` or template nodes for recursion and runtime components *(planned; the engine side exists)*
+6. **Linking** (`lower::linked`): child server components inlined into the caller's program, their data as pending calls (ADR-0013); slots, and `Call` or template nodes for recursion and runtime components, are *planned* (the engine side exists)
 7. **Lowering** (`lower`) to programs, with static parts folded by the engine, and each component's **record**: the values its data function writes, in program order; the **encoder** comes from the same traversal *(planned)*
 
 Each phase is a pure function of its input. Its **diagnostics** have a stable code, a message, a source span and a severity: an *error* makes the route fall back, and a *note* names a part that React renders at request time. The compiler never guesses.
