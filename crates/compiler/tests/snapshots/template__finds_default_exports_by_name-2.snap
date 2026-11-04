@@ -1,0 +1,8 @@
+---
+source: crates/compiler/tests/template.rs
+expression: "templates(r\"\nconst Price = () => <p>a</p>;\nexport { Price as default };\n\")"
+---
+component Price default
+  return 0:
+    <p>
+      text "a"

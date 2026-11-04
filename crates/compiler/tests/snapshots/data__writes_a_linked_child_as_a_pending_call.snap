@@ -1,0 +1,14 @@
+---
+source: crates/compiler/tests/data.rs
+expression: functions
+---
+
+// tsx2rs data functions (generated): each returns its template's record.
+const __tsx2rs_key = (key) => (key === undefined ? null : "" + key);
+export const __tsx2rs_data_Label = function Label({ text, n, children }) {
+  log("Label");
+  return [(text), (n), (children)];
+};
+export const __tsx2rs_data_Page = function Page({ t, k, rest }) {
+  return [[{"text": (log("text", t)), ...(rest), "key": (log("key", k)), "n": 2, "children": ["a ", (log("child", t))]}, undefined], [{"text": (log("text2", t))}, (log("key2", k))], [{"children": "only"}, undefined], (log("after", "!"))];
+};

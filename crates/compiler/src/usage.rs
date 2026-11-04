@@ -70,7 +70,12 @@ pub fn usages(graph: &ModuleGraph) -> (Vec<Usage<'_>>, Vec<Diagnostic>) {
     for (index, module) in graph.modules.iter().enumerate() {
         let id = ModuleId(index);
         for element in &module.component_uses {
-            let component = classify(graph, id, element, &mut diagnostics);
+            let tag = Tag {
+                name: &element.name,
+                member: element.member.as_deref(),
+                span: element.span,
+            };
+            let component = classify(graph, id, tag, &mut diagnostics);
             usages.push(Usage {
                 module: id,
                 element,
@@ -81,10 +86,35 @@ pub fn usages(graph: &ModuleGraph) -> (Vec<Usage<'_>>, Vec<Diagnostic>) {
     (usages, diagnostics)
 }
 
+/// What the component tag `name` (`member` for `<name.member>`) in `module` renders, without
+/// reporting anything: `usages` reports what can't be classified.
+#[must_use]
+pub fn component(
+    graph: &ModuleGraph,
+    module: ModuleId,
+    name: &str,
+    member: Option<&str>,
+) -> Component {
+    let tag = Tag {
+        name,
+        member,
+        span: (0, 0),
+    };
+    classify(graph, module, tag, &mut Vec::new())
+}
+
+/// A component tag, as written.
+#[derive(Clone, Copy)]
+struct Tag<'t> {
+    name: &'t str,
+    member: Option<&'t str>,
+    span: (u32, u32),
+}
+
 fn classify(
     graph: &ModuleGraph,
     id: ModuleId,
-    element: &ComponentUse,
+    element: Tag<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Component {
     let module = &graph.modules[id.0];
@@ -98,11 +128,11 @@ fn classify(
     let Some((import, binding)) = binding else {
         return Component::Local;
     };
-    let export = match (&binding.imported, &element.member) {
+    let export = match (&binding.imported, element.member) {
         (Imported::Default, None) => Export::Default,
         (Imported::Named(name), None) => Export::Named(name.clone()),
         (Imported::Namespace, Some(member)) if !member.contains('.') => {
-            Export::Named(member.clone())
+            Export::Named(member.to_owned())
         }
         _ => {
             diagnostics.push(diagnostic(
@@ -157,7 +187,7 @@ fn resolve(
     graph: &ModuleGraph,
     module: ModuleId,
     export: Export,
-    element: &ComponentUse,
+    element: Tag<'_>,
     user: ModuleId,
     diagnostics: &mut Vec<Diagnostic>,
     depth: usize,
@@ -266,7 +296,7 @@ fn resolve(
 fn diagnostic(
     graph: &ModuleGraph,
     module: ModuleId,
-    element: &ComponentUse,
+    element: Tag<'_>,
     message: &str,
 ) -> Diagnostic {
     Diagnostic {

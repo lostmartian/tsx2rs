@@ -27,6 +27,7 @@ oxc_parser = "0.156.0"
 oxc_span = "0.156.0"
 oxc_syntax = "0.156.0"
 oxc_resolver = "11.24.3"
+oxc_semantic = "0.156.0"
 insta = "1.49.0"
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 # Instruction-count benchmarks (Valgrind, ADR-0006). Pinned exactly: CI installs the same

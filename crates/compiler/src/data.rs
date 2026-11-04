@@ -10,12 +10,15 @@
 //!   value reads the same evaluation);
 //! - a list is the component's own `.map` call, its callback returning item records;
 //! - several returns are `[index, record]`; one is just its record;
+//! - a linked child component is a pending call, `[config, key]` as passed to React's `jsx`: the
+//!   runtime calls the child's own data function with its props after this record is complete,
+//!   as React runs children after their parent (ADR-0013);
 //! - the root's key path and wrap (ADR-0008) aren't in it: the runtime computes them.
 
 use std::fmt::Write as _;
 
 use crate::lower::{Slot, Test, ValueKind};
-use crate::template::{Component, Prop, Range};
+use crate::template::{Component, ComponentProp, Key, Literal, Node, Prop, Range};
 
 /// The name of a component's data function.
 #[must_use]
@@ -179,23 +182,91 @@ impl Writer<'_> {
                     .map(|(_, text)| text.clone())
                     .unwrap_or_default()
             }
+            Slot::Call {
+                key,
+                key_at,
+                props,
+                children,
+                ..
+            } => self.pending_call(key.as_ref(), *key_at, props, children),
             Slot::RootKey | Slot::RootWrap => return None, // the runtime's (ADR-0008)
         })
     }
 
     /// A props object as JSX builds it: in order, spreads included.
     fn props(&self, props: &[Prop]) -> String {
-        let entries: Vec<String> = props
-            .iter()
-            .map(|prop| match prop {
-                Prop::Static { name, value } => format!("{}: {}", json_key(name), value.json()),
-                Prop::Dynamic { name, value } => {
-                    format!("{}: ({})", json_key(name), self.text(*value))
-                }
-                Prop::Spread(span) => format!("...({})", self.text(*span)),
-            })
-            .collect();
+        let entries: Vec<String> = props.iter().map(|prop| self.prop(prop)).collect();
         format!("{{{}}}", entries.join(", "))
+    }
+
+    fn prop(&self, prop: &Prop) -> String {
+        match prop {
+            Prop::Static { name, value } => format!("{}: {}", json_key(name), value.json()),
+            Prop::Dynamic { name, value } => {
+                format!("{}: ({})", json_key(name), self.text(*value))
+            }
+            Prop::Spread(span) => format!("...({})", self.text(*span)),
+        }
+    }
+
+    /// A linked component's pending call (ADR-0013): `[config, key]`, the arguments of React's
+    /// `jsx(type, config, key)`, built as the JSX transform builds them. A key written after a
+    /// spread goes inside `config` (the transform's `createElement` form), in its place, and the
+    /// argument is `undefined`. The runtime takes the key and props from them as `jsx` does,
+    /// then calls the callee's data function once this record is complete.
+    fn pending_call(
+        &self,
+        key: Option<&Key>,
+        key_at: usize,
+        props: &[ComponentProp],
+        children: &[Node],
+    ) -> String {
+        let key_value = |key: &Key| match key {
+            Key::Static(key) => json_key(key),
+            Key::Dynamic(span) => format!("({})", self.text(*span)),
+        };
+        let in_config = props
+            .iter()
+            .take(key_at)
+            .any(|p| matches!(p, ComponentProp::Value(Prop::Spread(_))));
+        let mut entries = Vec::new();
+        for (i, prop) in props.iter().enumerate() {
+            if let (true, Some(key), true) = (in_config, key, i == key_at) {
+                entries.push(format!("\"key\": {}", key_value(key)));
+            }
+            if let ComponentProp::Value(prop) = prop {
+                entries.push(self.prop(prop)); // slots are never linked
+            }
+        }
+        if let (true, Some(key), true) = (in_config, key, key_at == props.len()) {
+            entries.push(format!("\"key\": {}", key_value(key)));
+        }
+        let children: Vec<String> = children.iter().filter_map(|c| self.child(c)).collect();
+        match children.as_slice() {
+            [] => {}
+            [only] => entries.push(format!("\"children\": {only}")),
+            all => entries.push(format!("\"children\": [{}]", all.join(", "))),
+        }
+        let key = match key {
+            Some(key) if !in_config => key_value(key),
+            _ => "undefined".to_owned(),
+        };
+        format!("[{{{}}}, {key}]", entries.join(", "))
+    }
+
+    /// A linked component's child, as JSX passes it: text, a literal or an expression.
+    fn child(&self, node: &Node) -> Option<String> {
+        Some(match node {
+            Node::Text(text) => json_key(text),
+            Node::Number(n) => crate::component::json_number(*n).unwrap_or_else(|| {
+                let infinite = if *n > 0.0 { "Infinity" } else { "-Infinity" };
+                (if n.is_nan() { "NaN" } else { infinite }).to_owned()
+            }),
+            Node::Literal(Literal::Null) => "null".to_owned(),
+            Node::Literal(Literal::Bool(b)) => b.to_string(),
+            Node::Hole(span) => format!("({})", self.text(*span)),
+            _ => return None, // linking only takes these
+        })
     }
 }
 

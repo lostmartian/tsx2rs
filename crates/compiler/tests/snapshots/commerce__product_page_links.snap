@@ -1,0 +1,14 @@
+---
+source: crates/compiler/tests/commerce.rs
+expression: out
+---
+app/product/[handle]/page.tsx ProductPage: 14 ops; links []
+app/product/[handle]/page.tsx RelatedProducts: 18 ops; links []
+components/grid/tile.tsx GridTileImage: 45 ops; links [Label, Price]
+components/layout/footer.tsx Footer: 20 ops; links []
+components/product/product-description.tsx ProductDescription: 28 ops; links [Price, Prose]
+components/label.tsx Label: 27 ops; links [Price]
+components/logo-square.tsx LogoSquare: 19 ops; links [LogoIcon]
+components/price.tsx Price: 15 ops; links []
+components/prose.tsx Prose: 1 ops; links []
+components/icons/logo.tsx LogoIcon: 9 ops; links []

@@ -13,9 +13,12 @@ use tsx2rs_ir::attribute::{ElementRules, Prop as Class, classify, is_custom_elem
 use tsx2rs_ir::input::{InputWriter, tag};
 use tsx2rs_ir::{ChunkId, FormatError, Op, OpIndex, Program};
 
+use crate::graph::{Module, ModuleGraph, ModuleId};
 use crate::template::{
-    Component, Condition, Element, Key, Literal, Node, Prop, Range, Template, Value,
+    Component, ComponentElement, ComponentProp, Condition, Element, Key, Literal, Node, Prop,
+    Range, Template, Value,
 };
+use crate::usage::{self, Export};
 
 /// A component lowered: its program and its record.
 #[derive(Debug)]
@@ -63,6 +66,27 @@ pub enum Slot {
         callback: Range,
         /// The item's record, as the `Returns` of the callback.
         item: Box<Self>,
+    },
+    /// A linked child component (ADR-0005, section 6): its template is inlined, and its data
+    /// comes from its own data function, called with this pending call's props once the
+    /// caller's record is complete (ADR-0005, section 4).
+    Call {
+        /// The module that defines the callee.
+        module: ModuleId,
+        /// The callee's index in that module's components.
+        component: usize,
+        /// The component element's key: the runtime's key path (ADR-0008).
+        key: Option<Key>,
+        /// Where the key is written among the props (`ComponentElement::key_at`).
+        key_at: usize,
+        /// Its props, in source order, as JSX builds them (no slots: those aren't linked yet).
+        props: Vec<ComponentProp>,
+        /// Its children (text, literals and holes only), the `children` prop.
+        children: Vec<Node>,
+        /// The element.
+        span: Range,
+        /// The callee's own record, built by its data function.
+        record: Vec<Self>,
     },
     /// Which `return` ran, as a chain of conditions, then that return's record. One return is
     /// just its record.
@@ -119,27 +143,137 @@ pub enum LowerError {
     /// The component has no template.
     #[error("the component returns nothing")]
     NoReturn,
+    /// [`linked`] was given a component that doesn't exist.
+    #[error("no component {index} in module {module:?}")]
+    NoComponent {
+        /// The module.
+        module: ModuleId,
+        /// The index asked for.
+        index: usize,
+    },
 }
 
-/// Lowers a component's templates into one program (one template; `Call` comes with linking).
+/// Lowers a component's templates into one program, on its own: every component element is a
+/// `Child` hole, rendered at runtime.
 ///
 /// # Errors
 ///
 /// [`LowerError`] when a static part can't be folded or the component has no `return`.
 pub fn component(component: &Component) -> Result<Lowered, LowerError> {
-    let mut lowering = Lowering::default();
-    let record = lowering.returns(&component.returns, true)?;
-    let record = match record {
-        Slot::Returns(mut returns) if returns.len() == 1 => returns.remove(0).1,
-        record => vec![record],
+    lower(Lowering::default(), component)
+}
+
+/// Lowers the `index`th component of `module` with its child components linked (ADR-0012,
+/// section 5): a child that the module graph resolves to a compiled server component is inlined
+/// into the program. A child stays a `Child` hole, rendered at runtime, when it's:
+/// - recursive (`Call` comes later), async, or calls a hook (React renders it, ADR-0005);
+/// - given JSX props or JSX children (slots come later);
+/// - named by anything but a module-level binding, or not a component the graph knows;
+/// - impossible to lower itself.
+///
+/// # Errors
+///
+/// [`LowerError`] when a static part of the component itself can't be folded, it has no
+/// `return`, or there's no such component.
+pub fn linked(graph: &ModuleGraph, module: ModuleId, index: usize) -> Result<Lowered, LowerError> {
+    let component = graph
+        .modules
+        .get(module.0)
+        .and_then(|m| m.components.get(index))
+        .ok_or(LowerError::NoComponent { module, index })?;
+    let lowering = Lowering {
+        link: Some(Link {
+            graph,
+            from: module,
+            stack: vec![(module, index)],
+        }),
+        ..Lowering::default()
     };
+    lower(lowering, component)
+}
+
+fn lower(mut lowering: Lowering<'_>, component: &Component) -> Result<Lowered, LowerError> {
+    let record = lowering.returns(&component.returns, true)?;
+    let record = returns_record(record);
     lowering.flush();
     let program = Program::new(lowering.chunks, lowering.ops)?;
     Ok(Lowered { program, record })
 }
 
+/// A component's record: one return's record is just that record.
+fn returns_record(record: Slot) -> Vec<Slot> {
+    match record {
+        Slot::Returns(mut returns) if returns.len() == 1 => returns.remove(0).1,
+        record => vec![record],
+    }
+}
+
+/// Linking state: the graph, the module whose source is being lowered, and the components being
+/// inlined (to find recursion).
+struct Link<'g> {
+    graph: &'g ModuleGraph,
+    from: ModuleId,
+    stack: Vec<(ModuleId, usize)>,
+}
+
+impl<'g> Link<'g> {
+    /// The compiled server component `element` links to, if it can be inlined.
+    fn callee(&self, element: &ComponentElement) -> Option<(ModuleId, usize, &'g Component)> {
+        let simple = |node: &Node| {
+            matches!(
+                node,
+                Node::Text(_) | Node::Number(_) | Node::Literal(_) | Node::Hole(_)
+            )
+        };
+        if !element.module_scope
+            || element
+                .props
+                .iter()
+                .any(|p| matches!(p, ComponentProp::Slot { .. }))
+            || !element.children.iter().all(simple)
+        {
+            return None;
+        }
+        let tag = (&element.name, element.member.as_deref());
+        let (module, index) = match usage::component(self.graph, self.from, tag.0, tag.1) {
+            usage::Component::Server { module, export } => {
+                (module, exported(&self.graph.modules[module.0], &export)?)
+            }
+            usage::Component::Local if tag.1.is_none() => {
+                let components = &self.graph.modules[self.from.0].components;
+                let index = components
+                    .iter()
+                    .position(|c| c.name.as_deref() == Some(tag.0.as_str()))?;
+                (self.from, index)
+            }
+            _ => return None,
+        };
+        let component = &self.graph.modules[module.0].components[index];
+        let linkable =
+            !component.is_async && !component.uses_hooks && !self.stack.contains(&(module, index));
+        linkable.then_some((module, index, component))
+    }
+}
+
+/// The index of the component `module` exports as `export`.
+fn exported(module: &Module, export: &Export) -> Option<usize> {
+    module.components.iter().position(|c| match export {
+        Export::Default => c.default_export,
+        Export::Named(name) => {
+            c.name.as_deref() == Some(name.as_str()) && module.exports.local.contains(name)
+        }
+    })
+}
+
+/// Where lowering is, to undo an inlining that failed.
+struct Mark {
+    ops: usize,
+    chunks: usize,
+    pending: Pending,
+}
+
 /// Static output not yet written as an op.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Pending {
     html: Vec<u8>,
     flight: Vec<u8>,
@@ -148,14 +282,79 @@ struct Pending {
 }
 
 #[derive(Default)]
-struct Lowering {
+struct Lowering<'g> {
     chunks: Vec<Box<[u8]>>,
     interned: HashMap<Vec<u8>, u32>,
     ops: Vec<Op>,
     pending: Pending,
+    /// `None` when lowering a component on its own.
+    link: Option<Link<'g>>,
 }
 
-impl Lowering {
+impl Lowering<'_> {
+    fn mark(&self) -> Mark {
+        Mark {
+            ops: self.ops.len(),
+            chunks: self.chunks.len(),
+            pending: self.pending.clone(),
+        }
+    }
+
+    fn undo(&mut self, mark: Mark) {
+        self.ops.truncate(mark.ops);
+        self.chunks.truncate(mark.chunks);
+        self.interned.retain(|_, id| (*id as usize) < mark.chunks);
+        self.pending = mark.pending;
+    }
+
+    /// A component element: inlined when it links to a compiled component, else a `Child` hole.
+    fn component_element(&mut self, element: &ComponentElement, record: &mut Vec<Slot>) {
+        let Some((module, index, callee)) =
+            self.link.as_ref().and_then(|link| link.callee(element))
+        else {
+            self.child(element.span, record);
+            return;
+        };
+        let mark = self.mark();
+        let from = self.enter(module, index);
+        let inlined = self.returns(&callee.returns, true);
+        self.leave(from);
+        if let Ok(inlined) = inlined {
+            record.push(Slot::Call {
+                module,
+                component: index,
+                key: element.key.clone(),
+                key_at: element.key_at,
+                props: element.props.clone(),
+                children: element.children.clone(),
+                span: element.span,
+                record: returns_record(inlined),
+            });
+        } else {
+            // The callee can't be compiled (its own lowering reports why): React renders it.
+            self.undo(mark);
+            self.child(element.span, record);
+        }
+    }
+
+    /// Starts lowering a callee's source; returns the caller's module.
+    fn enter(&mut self, module: ModuleId, index: usize) -> ModuleId {
+        match self.link.as_mut() {
+            Some(link) => {
+                link.stack.push((module, index));
+                std::mem::replace(&mut link.from, module)
+            }
+            None => module,
+        }
+    }
+
+    fn leave(&mut self, from: ModuleId) {
+        if let Some(link) = self.link.as_mut() {
+            link.stack.pop();
+            link.from = from;
+        }
+    }
+
     fn chunk(&mut self, bytes: &[u8]) -> ChunkId {
         if let Some(&id) = self.interned.get(bytes) {
             return ChunkId(id);
@@ -298,10 +497,8 @@ impl Lowering {
                 self.child(*span, record);
                 Ok(())
             }
-            // Until linking (C5), a component's element is a value the runtime renders; an
-            // element value is one by design.
-            Node::Component(component) => {
-                self.child(component.span, record);
+            Node::Component(element) => {
+                self.component_element(element, record);
                 Ok(())
             }
             Node::ElementValue(value) => {
