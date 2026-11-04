@@ -1,16 +1,19 @@
-//! Component fixtures (ADR-0012, section 6), step 5's acceptance test: a small `.tsx` component
-//! is compiled (template program, records, data functions), its data functions are run in
-//! Node.js and their records encoded by the generated encoder (`compiler::encoder`) and, as a
-//! cross-check, by a reference (`oracle/components.ts`), the program is rendered by the
+//! Component fixtures (ADR-0012 section 6, ADR-0015), step 5's acceptance test: components are
+//! compiled (template program, records, data functions, the generated encoder), their data
+//! functions run in Node.js and their records encoded by the generated encoder (ADR-0016) and, as
+//! a cross-check, by a reference (`oracle/components.ts`), the program is rendered by the
 //! engine, and the result is compared with React rendering the original component: HTML byte
 //! for byte, Flight payload equal.
+//!
+//! A fixture is one module (`components/*.tsx`); a component of a whole app (Commerce) works the
+//! same way, with its module graph.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tsx2rs_compiler::data;
-use tsx2rs_compiler::graph::{self, ModuleGraph, ModuleId};
+use tsx2rs_compiler::graph::{self, ModuleGraph, ModuleId, ModuleKind, Target};
 use tsx2rs_compiler::lower::{self, Body, Slot, Test, ValueKind};
 use tsx2rs_engine::{Output, render};
 use tsx2rs_ir::Program;
@@ -18,24 +21,27 @@ use tsx2rs_ir::Program;
 use crate::oracle::Process;
 use crate::tree::json_string;
 
-/// A fixture compiled: the entry's program, the plan that says how to read its records, and
-/// the module with the data functions appended.
+/// A component compiled: its program, the plan that says how to read its records, and its
+/// module graph twice, as written and with the data functions appended (JSON for the oracle).
 #[derive(Debug)]
 pub struct Compiled {
-    /// The page's template program.
+    /// The component's template program.
     pub program: Program,
     /// The records' shapes, as `oracle/components.ts` reads them (JSON).
     pub plan: String,
-    /// The fixture's source with its data functions.
+    /// The server modules, as written (JSON: path → source and resolved imports).
+    pub modules: String,
+    /// The same modules with their data functions appended.
     pub data: String,
     /// The generated encoder (ADR-0016).
     pub encoder: String,
-    /// The data functions the encoder's `data` array holds, by name, in order.
-    pub callees: Vec<String>,
+    /// The data functions the encoder's `data` array holds, in order (JSON:
+    /// `[{module, export}]`).
+    pub callees: String,
 }
 
-/// Compiles a fixture: `source` is the page's module (`app/page.tsx`), its default export the
-/// page.
+/// Compiles a one-module fixture: `source` is the page's module (`app/page.tsx`), its default
+/// export the page.
 ///
 /// # Errors
 ///
@@ -46,27 +52,67 @@ pub fn compile(source: &str) -> Result<Compiled, String> {
     if let Some(d) = graph.diagnostics.first() {
         return Err(format!("{}: {}", d.code, d.message));
     }
-    let module = &graph.modules[0];
-    let entry = module
+    let entry = graph.modules[0]
         .components
         .iter()
         .position(|c| c.default_export)
         .ok_or("the fixture has no default export")?;
-    let lowered = lower::linked(&graph, ModuleId(0), entry).map_err(|e| e.to_string())?;
-    // Every component's data function, from its own record.
-    let own: Vec<_> = (0..module.components.len())
-        .map(|i| lower::linked(&graph, ModuleId(0), i).map_err(|e| e.to_string()))
-        .collect::<Result<_, _>>()?;
-    let pairs: Vec<_> = module
-        .components
+    compile_component(&graph, &dir.0, ModuleId(0), entry)
+}
+
+/// Compiles the `index`th component of `module`, in a graph built from the project at `root`.
+///
+/// # Errors
+///
+/// What failed: a source that can't be read, or a component that doesn't lower.
+pub fn compile_component(
+    graph: &ModuleGraph,
+    root: &Path,
+    module: ModuleId,
+    index: usize,
+) -> Result<Compiled, String> {
+    let lowered = lower::linked(graph, module, index).map_err(|e| e.to_string())?;
+    let (mut modules, mut data_modules) = (String::from("{"), String::from("{"));
+    for (m, server) in graph
+        .modules
         .iter()
-        .zip(&own)
-        .map(|(c, l)| (c, l.record.as_slice()))
-        .collect();
-    let data = format!("{source}{}", data::functions(source, &pairs));
-    let plan = Plan { graph: &graph };
-    let mut json = String::from(r#"{"entry":"#);
-    json_string(&mut json, &data::name(&module.components[entry]));
+        .enumerate()
+        .filter(|(_, m)| m.kind == ModuleKind::Server)
+    {
+        let source = std::fs::read_to_string(root.join(&server.path))
+            .map_err(|e| format!("{}: {e}", server.path))?;
+        // Every component's data function, from its own record.
+        let own: Vec<_> = (0..server.components.len())
+            .map(|i| lower::linked(graph, ModuleId(m), i).map_err(|e| e.to_string()))
+            .collect::<Result<_, _>>()?;
+        let pairs: Vec<_> = server
+            .components
+            .iter()
+            .zip(&own)
+            .map(|(c, l)| (c, l.record.as_slice()))
+            .collect();
+        let with_data = format!("{source}{}", data::functions(&source, &pairs));
+        let imports = imports(graph, ModuleId(m));
+        for (out, text) in [(&mut modules, &source), (&mut data_modules, &with_data)] {
+            if out.len() > 1 {
+                out.push(',');
+            }
+            json_string(out, &server.path);
+            out.push_str(r#":{"source":"#);
+            json_string(out, text);
+            let _ = write!(out, r#","imports":{imports}}}"#);
+        }
+    }
+    modules.push('}');
+    data_modules.push('}');
+    let plan = Plan { graph };
+    let mut json = String::from(r#"{"module":"#);
+    json_string(&mut json, &graph.modules[module.0].path);
+    json.push_str(r#","entry":"#);
+    json_string(
+        &mut json,
+        &data::name(&graph.modules[module.0].components[index]),
+    );
     json.push_str(r#","record":"#);
     plan.record(&mut json, &lowered.record, true);
     json.push_str(r#","templates":["#);
@@ -78,18 +124,48 @@ pub fn compile(source: &str) -> Result<Compiled, String> {
     }
     json.push_str("]}");
     let encoder = tsx2rs_compiler::encoder::generate(&lowered);
-    let callees = encoder
-        .callees
-        .iter()
-        .map(|(m, i)| data::name(&graph.modules[m.0].components[*i]))
-        .collect();
+    let mut callees = String::from("[");
+    for (n, (m, i)) in encoder.callees.iter().enumerate() {
+        if n > 0 {
+            callees.push(',');
+        }
+        callees.push_str(r#"{"module":"#);
+        json_string(&mut callees, &graph.modules[m.0].path);
+        callees.push_str(r#","export":"#);
+        json_string(
+            &mut callees,
+            &data::name(&graph.modules[m.0].components[*i]),
+        );
+        callees.push('}');
+    }
+    callees.push(']');
     Ok(Compiled {
         program: lowered.program,
         plan: json,
-        data,
+        modules,
+        data: data_modules,
         encoder: encoder.source,
         callees,
     })
+}
+
+/// Where a module's imports of other server modules lead (JSON: specifier → path).
+fn imports(graph: &ModuleGraph, module: ModuleId) -> String {
+    let mut out = String::from("{");
+    for import in &graph.modules[module.0].imports {
+        if let Target::Module(target) = import.target
+            && graph.modules[target.0].kind == ModuleKind::Server
+        {
+            if out.len() > 1 {
+                out.push(',');
+            }
+            json_string(&mut out, &import.specifier);
+            out.push(':');
+            json_string(&mut out, &graph.modules[target.0].path);
+        }
+    }
+    out.push('}');
+    out
 }
 
 /// Writes record shapes as `oracle/components.ts`'s `Slot` type.
@@ -172,7 +248,9 @@ impl Plan<'_> {
                 ..
             } => {
                 let callee = &self.graph.modules[module.0].components[*component];
-                out.push_str(r#"{"c":"#);
+                out.push_str(r#"{"m":"#);
+                json_string(out, &self.graph.modules[module.0].path);
+                out.push_str(r#","c":"#);
                 json_string(out, &data::name(callee));
                 let _ = write!(out, r#","root":{root},"#);
                 match body {
@@ -245,43 +323,62 @@ impl Fixtures {
         })
     }
 
-    /// Compiles the fixture `source` and checks every one of its cases against React; returns
-    /// how many there were.
+    /// Compiles the one-module fixture `source` and checks every one of its cases (its
+    /// `export const cases`) against React; returns how many there were.
     ///
     /// # Errors
     ///
     /// What failed, for the first case that did.
     pub fn check(&mut self, source: &str) -> Result<usize, String> {
         let compiled = compile(source)?;
-        let mut request = String::from(r#"{"op":"cases","source":"#);
-        json_string(&mut request, source);
-        request.push('}');
-        let cases = self.ask_html(&request)?;
-        let cases: usize = field(&cases, "cases")
-            .and_then(|n| n.parse().ok())
-            .ok_or_else(|| format!("no cases: {cases}"))?;
-        for case in 0..cases {
-            self.case(source, &compiled, case)
-                .map_err(|e| format!("case {case}: {e}"))?;
-        }
-        Ok(cases)
+        let page = r#"{"module":"app/page.tsx","export":"default"}"#;
+        let cases = r#"{"module":"app/page.tsx","export":"cases"}"#;
+        self.check_compiled(&compiled, page, cases)
     }
 
-    fn case(&mut self, source: &str, compiled: &Compiled, case: usize) -> Result<(), String> {
-        let mut request = String::from(r#"{"op":"input","source":"#);
-        json_string(&mut request, source);
-        request.push_str(r#","data":"#);
-        json_string(&mut request, &compiled.data);
-        request.push_str(r#","encoder":"#);
-        json_string(&mut request, &compiled.encoder);
-        request.push_str(r#","callees":["#);
-        for (i, name) in compiled.callees.iter().enumerate() {
-            if i > 0 {
-                request.push(',');
-            }
-            json_string(&mut request, name);
+    /// Checks a compiled component against React for every case: `page` names it for React
+    /// (`{"module", "export"}`, JSON), and `cases` where its props come from (`{"module" |
+    /// "file", "export"}`). Returns how many cases there were.
+    ///
+    /// # Errors
+    ///
+    /// What failed, for the first case that did.
+    pub fn check_compiled(
+        &mut self,
+        compiled: &Compiled,
+        page: &str,
+        cases: &str,
+    ) -> Result<usize, String> {
+        let request = format!(
+            r#"{{"op":"cases","modules":{},"cases":{cases}}}"#,
+            compiled.modules
+        );
+        let response = self.ask_html(&request)?;
+        let n: usize = field(&response, "cases")
+            .and_then(|n| n.parse().ok())
+            .ok_or_else(|| format!("no cases: {response}"))?;
+        let subject = format!(
+            r#""modules":{},"page":{page},"cases":{cases}"#,
+            compiled.modules
+        );
+        for case in 0..n {
+            self.case(compiled, &subject, case)
+                .map_err(|e| format!("case {case}: {e}"))?;
         }
-        let _ = write!(request, r#"],"plan":{},"case":{case}}}"#, compiled.plan);
+        Ok(n)
+    }
+
+    fn case(&mut self, compiled: &Compiled, subject: &str, case: usize) -> Result<(), String> {
+        let mut request = format!(
+            r#"{{"op":"input",{subject},"data":{},"encoder":"#,
+            compiled.data
+        );
+        json_string(&mut request, &compiled.encoder);
+        let _ = write!(
+            request,
+            r#","callees":{},"plan":{},"case":{case}}}"#,
+            compiled.callees, compiled.plan
+        );
         let response = self.ask_html(&request)?;
         let hex = field(&response, "input")
             .map(|h| h.trim_matches('"').to_owned())
@@ -299,18 +396,14 @@ impl Fixtures {
             text(&output.flight)?,
             text(output.hints.rows())?,
         );
-        let mut request = String::from(r#"{"op":"flight","source":"#);
-        json_string(&mut request, source);
-        let _ = write!(request, r#","case":{case}}}"#);
+        let request = format!(r#"{{"op":"flight",{subject},"case":{case}}}"#);
         let response = self
             .flight
             .ask(&request)
             .map_err(|e| format!("oracle I/O: {e}"))?;
         let payload =
             field(&response, "payload").ok_or_else(|| format!("React's Flight: {response}"))?;
-        let mut request = String::from(r#"{"op":"judge","source":"#);
-        json_string(&mut request, source);
-        let _ = write!(request, r#","case":{case},"engineHtml":"#);
+        let mut request = format!(r#"{{"op":"judge",{subject},"case":{case},"engineHtml":"#);
         json_string(&mut request, &html);
         request.push_str(r#","engineFlight":"#);
         json_string(&mut request, &flight);

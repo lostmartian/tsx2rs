@@ -11,6 +11,7 @@
   "dependencies": {
     "@tsx2rs/identity": "workspace:*",
     "@tsx2rs/runtime": "workspace:*",
+    "clsx": "2.1.1",
     "next": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
