@@ -10,7 +10,7 @@ mod common;
 
 use common::Project;
 use tsx2rs_compiler::graph::{ModuleGraph, ModuleId};
-use tsx2rs_compiler::lower::{self, Lowered, Slot, ValueKind};
+use tsx2rs_compiler::lower::{self, Body, Lowered, Slot, ValueKind};
 use tsx2rs_engine::{Output, render};
 use tsx2rs_ir::input::{InputWriter, tag};
 
@@ -56,20 +56,31 @@ fn root_close(w: &mut InputWriter, wrap: bool) {
     w.condition(wrap);
 }
 
-/// Each component element in a record, in order: `call` (linked) or `child` (rendered at
-/// runtime).
-fn links(record: &[Slot]) -> Vec<&'static str> {
+/// Each component element and hole in a record, in order: `call` (inlined), `call N` (run with
+/// template N), `slot` (a placed slot, then what's in it) or `child` (rendered at runtime).
+fn links(record: &[Slot]) -> Vec<String> {
     let mut out = Vec::new();
     for slot in record {
         match slot {
-            Slot::Call { record, .. } => {
-                out.push("call");
+            Slot::Call {
+                body: Body::Inline(record),
+                ..
+            } => {
+                out.push("call".to_owned());
+                out.extend(links(record));
+            }
+            Slot::Call {
+                body: Body::Template(t),
+                ..
+            } => out.push(format!("call {t}")),
+            Slot::Placed { record, .. } => {
+                out.push("slot".to_owned());
                 out.extend(links(record));
             }
             Slot::Value {
                 kind: ValueKind::Child,
                 ..
-            } => out.push("child"),
+            } => out.push("child".to_owned()),
             Slot::Branch {
                 then, otherwise, ..
             } => {
@@ -112,7 +123,7 @@ export default function Page({ x }) {
     let Slot::Call {
         module,
         component,
-        record,
+        body: Body::Inline(record),
         ..
     } = call
     else {
@@ -217,22 +228,22 @@ fn leaves_what_it_cannot_link_to_the_runtime() {
             "app/page.tsx",
             r#"import { use } from "react";
 import { Counter } from "./counter";
-function Tree({ n }) { return <ul>{n > 0 && <Tree n={n - 1} />}</ul>; }
 function Hooked({ p }) { const v = use(p); return <i>{v}</i>; }
 async function Later() { return <s>later</s>; }
-function Box({ children, title }) { return <div>{title}{children}</div>; }
 function Shadowed() { return <u>never linked</u>; }
+function Uses({ children }) { return <div>{children.length}</div>; }
+function List({ items }) { return <ul>{items.map((i) => <li key={i}>{i}</li>)}</ul>; }
+function Tree({ n, children }) { return <ul>{children}{n > 0 && <Tree n={n - 1}><b>x</b></Tree>}</ul>; }
 export default function Page({ p, Shadowed }) {
   return (
     <main>
-      <Tree n={2} />
       <Hooked p={p} />
       <Later />
-      <Box title={<b>jsx prop</b>} />
-      <Box><b>jsx child</b></Box>
-      <Box title="t">text child {p}</Box>
       <Shadowed />
       <Counter />
+      <Uses><b>children used as a value</b></Uses>
+      <List items={<b>a JSX prop it doesn't place</b>} />
+      <Tree n={1}><i>slot</i></Tree>
     </main>
   );
 }"#,
@@ -247,20 +258,132 @@ export function Counter() { return null; }"#,
     assert_eq!(
         links(&page.record),
         [
-            "call",  // Tree, once:
-            "child", // its recursive call stays a value the runtime renders
-            "child", // and `n > 0` itself, rendered when it's falsy
             "child", // a component that calls a hook: React renders it
-            "child", // async: not linked yet
-            "child", // a JSX prop: a slot, not linked yet
-            "child", // JSX children: a slot, not linked yet
-            "call",  // text and expression children are plain props
-            "child", // Box's `{title}`
-            "child", // Box's `{children}`
+            "child", // async: its own Flight row (`$L1`), which comes with streaming
             "child", // a parameter shadows the module's `Shadowed`
             "child", // a client component
+            "child", // `children` used as a value, not only placed
+            "child", // a JSX prop the callee doesn't place
+            "call",  // Tree, inlined
+            "slot",  // with its slot, `<i>slot</i>`
+            "child", // its recursive call has a slot, so it can't share a template
+            "child", // and `n > 0` itself, rendered when it's falsy
         ]
     );
+}
+
+#[test]
+fn places_slots_where_the_callee_places_them() {
+    let g = graph(&[
+        (
+            "app/page.tsx",
+            r#"import { Box } from "./box";
+export default function Page({ t, y }) {
+  return <section><Box title={<h2>{t}</h2>}><b key="k">x</b>{y}</Box></section>;
+}"#,
+        ),
+        (
+            "app/box.tsx",
+            "export function Box({ children, title }) { return <div>{title}{children}</div>; }",
+        ),
+    ]);
+    let page = page(&g);
+    assert_eq!(
+        links(&page.record),
+        ["call", "slot", "child", "slot", "child"]
+    );
+    let [_, _, Slot::Call { slots, .. }, _] = page.record.as_slice() else {
+        panic!("{:?}", page.record);
+    };
+    let names: Vec<&str> = slots.iter().map(|(p, _)| p.as_str()).collect();
+    assert_eq!(names, ["title", "children"]);
+    let out = rendered(&page, |w| {
+        root_open(w, false, None);
+        root_open(w, false, None); // Box's `<div>`
+        w.tag(tag::STRING).string("T"); // the title slot's `{t}`
+        w.tag(tag::STRING).string("y"); // the children slot's `{y}`
+        root_close(w, false);
+        root_close(w, false);
+    });
+    assert_eq!(
+        out,
+        (
+            "<section><div><h2>T</h2><b>x</b>y</div></section>".into(),
+            concat!(r#"0:["$","section",null,{"children":["$","div",null,{"children":[["$","h2",null,{"children":"T"}],[["$","b","k",{"children":"x"}],"y"]]}]}]"#, "\n").into()
+        )
+    );
+}
+
+#[test]
+fn links_components_inside_slots_from_the_caller() {
+    let g = graph(&[(
+        "app/page.tsx",
+        r#"function Card({ children }) { return <article><p>a</p>{children}z</article>; }
+function Name({ name }) { return name; }
+export default function Page() { return <Card>t<Name name="N" /></Card>; }"#,
+    )]);
+    let page = page(&g);
+    assert_eq!(links(&page.record), ["call", "slot", "call", "child"]);
+    let out = rendered(&page, |w| {
+        root_open(w, false, None); // Card's `<article>`, the page's output
+        w.tag(tag::STRING).string("N");
+        root_close(w, false);
+    });
+    assert_eq!(
+        out,
+        (
+            "<article><p>a</p>t<!-- -->N<!-- -->z</article>".into(),
+            concat!(r#"0:["$","article",null,{"children":[["$","p",null,{"children":"a"}],["t","N"],"z"]}]"#, "\n").into()
+        )
+    );
+}
+
+#[test]
+fn runs_recursive_components_with_call() {
+    let g = graph(&[(
+        "app/page.tsx",
+        r"function Tree({ n }) { return <ul>{n > 0 && <Tree n={n - 1} />}</ul>; }
+export default function Page() { return <main><Tree n={2} /></main>; }",
+    )]);
+    let page = page(&g);
+    assert_eq!(links(&page.record), ["call", "call 1", "child"]);
+    assert_eq!(page.program.templates().len(), 2);
+    assert_eq!(links(&page.templates[0]), ["call 1", "child"]);
+    let out = rendered(&page, |w| {
+        root_open(w, false, None);
+        root_open(w, false, None); // Tree, inlined
+        w.condition(true);
+        root_open(w, false, None); // Tree, template 1
+        w.condition(true);
+        root_open(w, false, None); // Tree, template 1 again
+        w.condition(false).tag(tag::FALSE);
+        root_close(w, false);
+        root_close(w, false);
+        root_close(w, false);
+        root_close(w, false);
+    });
+    assert_eq!(
+        out,
+        (
+            "<main><ul><ul><ul></ul></ul></ul></main>".into(),
+            concat!(r#"0:["$","main",null,{"children":["$","ul",null,{"children":["$","ul",null,{"children":["$","ul",null,{"children":false}]}]}]}]"#, "\n").into()
+        )
+    );
+}
+
+#[test]
+fn undoes_templates_made_by_a_failed_inlining() {
+    // `Outer` fails to lower after `Tree` got a template: the template must go too, since it
+    // uses chunks the undo drops.
+    let g = graph(&[(
+        "app/page.tsx",
+        r"function Tree({ n }) { return <ol>{n > 0 && <Tree n={n - 1} />}</ol>; }
+function Outer() { return <div><Tree n={1} /><br>child</br></div>; }
+export default function Page() { return <main><Outer /><Tree n={1} /></main>; }",
+    )]);
+    let page = page(&g);
+    assert_eq!(links(&page.record), ["child", "call", "call 1", "child"]);
+    assert_eq!(page.program.templates().len(), 2);
 }
 
 #[test]
@@ -285,4 +408,18 @@ export default function Page() { return <p>a<Broken />b</p>; }",
             "0:[\"$\",\"p\",null,{\"children\":[\"a\",\"x\",\"b\"]}]\n".into()
         )
     );
+}
+
+#[test]
+fn keeps_one_callers_slots_out_of_a_shared_template() {
+    // The outer `Box` gets a slot; its recursive call doesn't, so template 1 (shared by every
+    // call) reads `{children}` as a value.
+    let g = graph(&[(
+        "app/page.tsx",
+        r"function Box({ n, children }) { return <div>{children}{n > 0 && <Box n={n - 1} />}</div>; }
+export default function Page() { return <main><Box n={1}><b>s</b></Box></main>; }",
+    )]);
+    let page = page(&g);
+    assert_eq!(links(&page.record), ["call", "slot", "call 1", "child"]);
+    assert_eq!(links(&page.templates[0]), ["child", "call 1", "child"]);
 }

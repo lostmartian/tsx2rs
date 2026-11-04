@@ -220,3 +220,32 @@ export const order_seen = () => order;
         )
     );
 }
+
+#[test]
+fn builds_slot_records_into_the_pending_call() {
+    let source = r#"let order = [];
+const log = (name, v) => { order.push(name); return v; };
+function Box({ children, title }) {
+  return <div>{title}{children}</div>;
+}
+export default function Page({ t, c }) {
+  return <Box title={<h2>{log("title", t)}</h2>}>{log("child", c)}<b>static</b></Box>;
+}
+export const order_seen = () => order;
+"#;
+    let (functions, module) = generated(source);
+    insta::assert_snapshot!(functions);
+    // The caller builds each slot's record into the call's props, in JSX order (children last);
+    // the callee's data function places those records as its values.
+    assert_eq!(
+        run(
+            &module,
+            "(() => { const [call] = m.__tsx2rs_data_Page({ t: 'T', c: 'C' }); \
+             return [call, m.__tsx2rs_data_Box(call[0]), m.order_seen()]; })()"
+        ),
+        concat!(
+            r#"[[{"title":["T"],"children":["C"]},"<undefined>"],"#,
+            r#"[["T"],["C"]],["title","child"]]"#
+        )
+    );
+}

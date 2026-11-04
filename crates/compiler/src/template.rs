@@ -12,7 +12,7 @@ use oxc_ast::ast::{
     UnaryOperator,
 };
 use oxc_ast_visit::{Visit, walk};
-use oxc_semantic::Scoping;
+use oxc_semantic::{Scoping, SymbolId};
 use oxc_span::{GetSpan, Span};
 use oxc_syntax::scope::ScopeFlags;
 
@@ -38,6 +38,21 @@ pub struct Component {
     /// The JSX it returns, one template per `return` (or the arrow's expression body), in source
     /// order. A `return` of something else (`null`, `notFound()`) is a template too: a hole.
     pub returns: Vec<Template>,
+    /// The props it only places (ADR-0005, section 6): a caller's JSX for them can be compiled as
+    /// a slot, linked where they're placed.
+    pub placed: Vec<Placed>,
+}
+
+/// A prop a component only places: destructured from its props (`{ children }`, no default),
+/// and every reference to it is a `{children}` hole in its templates. A hole at a template's root
+/// doesn't count: React gives that the component's key path (ADR-0008), and a hole passed on to
+/// another component doesn't count either.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Placed {
+    /// The prop's name.
+    pub prop: String,
+    /// The holes that place it, in source order.
+    pub holes: Vec<Range>,
 }
 
 /// The JSX in one template position.
@@ -273,6 +288,7 @@ pub fn extract(program: &Program<'_>, scoping: &Scoping) -> (Vec<Component>, Vec
     let mut extractor = Extractor {
         problems: Vec::new(),
         scoping,
+        identifiers: Vec::new(),
     };
     let mut components = Vec::new();
     for statement in &program.body {
@@ -287,6 +303,28 @@ pub fn extract(program: &Program<'_>, scoping: &Scoping) -> (Vec<Component>, Vec
         }
     }
     (components, extractor.problems)
+}
+
+/// The holes of a template tree where a value is placed as it is: everywhere but inside a
+/// component element (passed on as a prop) or an element value.
+fn placed_holes(node: &Node, out: &mut Vec<Range>) {
+    match node {
+        Node::Hole(span) => out.push(*span),
+        Node::Element(e) => e.children.iter().for_each(|c| placed_holes(c, out)),
+        Node::Fragment(children) => children.iter().for_each(|c| placed_holes(c, out)),
+        Node::Conditional(c) => {
+            placed_holes(&c.consequent, out);
+            if let Some(alternate) = &c.alternate {
+                placed_holes(alternate, out);
+            }
+        }
+        Node::List(l) => l.item.iter().for_each(|t| placed_holes(&t.root, out)),
+        Node::Text(_)
+        | Node::Number(_)
+        | Node::Literal(_)
+        | Node::Component(_)
+        | Node::ElementValue(_) => {}
+    }
 }
 
 /// The local name a statement exports as the default, when it names a binding.
@@ -308,6 +346,9 @@ fn default_export_name<'a>(statement: &'a Statement<'_>) -> Option<&'a str> {
 struct Extractor<'s> {
     problems: Vec<Problem>,
     scoping: &'s Scoping,
+    /// Holes that are a lone identifier, and the binding each refers to, in the component being
+    /// extracted.
+    identifiers: Vec<(Range, SymbolId)>,
 }
 
 /// A function that may be a component.
@@ -396,6 +437,7 @@ impl Extractor<'_> {
         if !(default_export || capitalized) {
             return;
         }
+        self.identifiers.clear();
         let (span, is_async, returns, uses_hooks) = match function {
             Candidate::Function(function) => {
                 let Some(body) = &function.body else { return };
@@ -412,6 +454,11 @@ impl Extractor<'_> {
                 hooks.0
             }),
         };
+        let params = match function {
+            Candidate::Function(function) => function.params.items.first(),
+            Candidate::Arrow(arrow) => arrow.params.items.first(),
+        };
+        let placed = params.map_or_else(Vec::new, |p| self.placed(&p.pattern, &returns));
         out.push(Component {
             name: name.map(str::to_owned),
             default_export,
@@ -419,7 +466,46 @@ impl Extractor<'_> {
             span: range(span),
             uses_hooks,
             returns,
+            placed,
         });
+    }
+
+    /// The props a component destructures from `pattern` and only places in `returns`.
+    fn placed(&self, pattern: &BindingPattern<'_>, returns: &[Template]) -> Vec<Placed> {
+        let BindingPattern::ObjectPattern(object) = pattern else {
+            return Vec::new();
+        };
+        let mut holes = Vec::new();
+        for template in returns {
+            if !matches!(template.root, Node::Hole(_)) {
+                placed_holes(&template.root, &mut holes);
+            }
+        }
+        object
+            .properties
+            .iter()
+            .filter_map(|property| {
+                let BindingPattern::BindingIdentifier(id) = &property.value else {
+                    return None; // a default, or a nested pattern
+                };
+                let name = property.key.static_name()?;
+                let prop = name.as_js_str().as_str()?.to_owned();
+                let symbol = id.symbol_id.get()?;
+                let placing: Vec<Range> = self
+                    .identifiers
+                    .iter()
+                    .filter(|(span, s)| *s == symbol && holes.contains(span))
+                    .map(|(span, _)| *span)
+                    .collect();
+                let references = self.scoping.get_resolved_reference_ids(symbol).len();
+                let only_placed =
+                    !property.computed && !placing.is_empty() && placing.len() == references;
+                only_placed.then_some(Placed {
+                    prop,
+                    holes: placing,
+                })
+            })
+            .collect()
     }
 
     /// An arrow's templates: its expression body, or its `return`s.
@@ -510,6 +596,16 @@ impl Extractor<'_> {
                 }))
             }
             Expression::CallExpression(call) => self.map_call(call).unwrap_or(Node::Hole(span)),
+            Expression::Identifier(id) => {
+                let symbol = id
+                    .reference_id
+                    .get()
+                    .and_then(|reference| self.scoping.get_reference(reference).symbol_id());
+                if let Some(symbol) = symbol {
+                    self.identifiers.push((span, symbol));
+                }
+                Node::Hole(span)
+            }
             _ => Node::Hole(span),
         }
     }
