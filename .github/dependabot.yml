@@ -7,7 +7,11 @@ updates:
     directory: /
     schedule: { interval: weekly }
     commit-message: { prefix: build, include: scope }
-    groups: { rust-minor: { update-types: [minor, patch] } }
+    groups:
+      # oxc's crates share one version and must move together. A 0.x bump (0.155 → 0.156) counts
+      # as breaking, so the minor group below doesn't take it.
+      oxc: { patterns: ["oxc*"] }
+      rust-minor: { update-types: [minor, patch] }
   - package-ecosystem: npm
     directory: /
     schedule: { interval: weekly }
