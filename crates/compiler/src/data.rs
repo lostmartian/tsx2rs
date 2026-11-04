@@ -4,16 +4,21 @@
 //! closures and module scope are the component's own.
 //!
 //! The record's shape is the contract with the encoder (step 6):
-//! - a value is the expression's value; a key is `null` or `"" + key`, as React makes it;
+//! - a value is the expression's value;
+//! - an element whose key is known only at runtime (a root, a dynamic key, a spread) is
+//!   `[key, ...record]`: the key as React's `jsx` takes it (`null` or `"" + key`), evaluated
+//!   where the JSX transform evaluates it;
 //! - a props object (`Op::Attributes`) is built as JSX builds it, spreads included;
 //! - a branch is `[taken, [record]]`, its test evaluated once (a branch that renders the tested
 //!   value reads the same evaluation);
 //! - a list is the component's own `.map` call, its callback returning item records;
-//! - several returns are `[index, record]`; one is just its record;
+//! - a choice between several returns is `[index, record]` (a component's record is then
+//!   `[[index, record]]`); with one return, there's no choice, just the record;
 //! - a linked child component is a pending call, `[config, key]` as passed to React's `jsx`: the
 //!   runtime calls the child's own data function with its props after this record is complete,
 //!   as React runs children after their parent (ADR-0013);
-//! - the root's key path and wrap (ADR-0008) aren't in it: the runtime computes them.
+//! - for a root element, the runtime puts the key path in front of that key and decides the
+//!   wrap (ADR-0008), which isn't in the record.
 
 use std::fmt::Write as _;
 
@@ -35,7 +40,12 @@ pub fn name(component: &Component) -> String {
 pub fn functions(source: &str, components: &[(&Component, &[Slot])]) -> String {
     let mut out = String::from(
         "\n// tsx2rs data functions (generated): each returns its template's record.\n\
-         const __tsx2rs_key = (key) => (key === undefined ? null : \"\" + key);\n",
+         const __tsx2rs_key = (key) => (key === undefined ? null : \"\" + key);\n\
+         const __tsx2rs_keyed = (record, key) => [__tsx2rs_key(key), ...record];\n\
+         const __tsx2rs_el = (config, record, key) => {\n\
+         \x20 const { key: own, ...props } = config;\n\
+         \x20 return [own === undefined ? __tsx2rs_key(key) : \"\" + own, props, ...record];\n\
+         };\n",
     );
     for (component, record) in components {
         let mut writer = Writer { source, depth: 0 };
@@ -47,7 +57,14 @@ pub fn functions(source: &str, components: &[(&Component, &[Slot])]) -> String {
                 vec![(span, record.to_vec())]
             }
         };
-        let replacements = returns_replacements(&mut writer, &returns);
+        let mut replacements = returns_replacements(&mut writer, &returns);
+        if returns.len() > 1 {
+            // A record is an array of slot values: here one slot, `Returns`, whose value is
+            // `[index, record]`.
+            for (_, text) in &mut replacements {
+                *text = format!("[{text}]");
+            }
+        }
         let function = writer.rewrite(component.span, &replacements);
         let _ = writeln!(out, "export const {} = {function};", name(component));
     }
@@ -120,7 +137,6 @@ impl Writer<'_> {
                     _ => format!("({})", self.text(*span)),
                 };
                 match kind {
-                    ValueKind::Key => format!("__tsx2rs_key{value}"),
                     ValueKind::Prop
                     | ValueKind::Style
                     | ValueKind::FlightOnly
@@ -192,8 +208,86 @@ impl Writer<'_> {
             } => self.pending_call(key.as_ref(), *key_at, props, children, slots),
             // The value placed is the slot's record, built by the caller.
             Slot::Placed { span, .. } => format!("({})", self.text(*span)),
-            Slot::RootKey | Slot::RootWrap => return None, // the runtime's (ADR-0008)
+            Slot::Keyed {
+                key,
+                key_at,
+                props,
+                record,
+                ..
+            } => self.keyed(key.as_ref(), *key_at, props, record, tested),
+            Slot::RootWrap => return None, // the runtime's (ADR-0008)
         })
+    }
+
+    /// An element's `[key, ...record]`, evaluated in the JSX transform's order:
+    /// - with a spread, `jsx(type, config, key)` (or `createElement(type, config)` when the key
+    ///   comes after a spread, with the key inside `config`), resolved as React does: `config.key`
+    ///   wins, and the props leave `key` out (`__tsx2rs_el`);
+    /// - with a dynamic key, after the props and children (`__tsx2rs_keyed`);
+    /// - with a static key or none, nothing to evaluate.
+    fn keyed(
+        &mut self,
+        key: Option<&Key>,
+        key_at: usize,
+        props: &[Prop],
+        record: &[Slot],
+        tested: Option<(Range, &str)>,
+    ) -> String {
+        let source = self.source;
+        let key_value = |key: &Key| match key {
+            Key::Static(key) => json_key(key),
+            Key::Dynamic(span) => format!(
+                "({})",
+                source
+                    .get(span.0 as usize..span.1 as usize)
+                    .unwrap_or_default()
+            ),
+        };
+        let values: Vec<String> = record
+            .iter()
+            .filter_map(|slot| self.slot(slot, tested))
+            .collect();
+        if props.iter().any(|p| matches!(p, Prop::Spread(_))) {
+            // The record starts with the props object (`Slot::Props`).
+            let in_config = props
+                .iter()
+                .take(key_at)
+                .any(|p| matches!(p, Prop::Spread(_)));
+            let mut entries: Vec<String> = props.iter().map(|p| self.prop(p)).collect();
+            let maybe = match key {
+                Some(key) if in_config => {
+                    entries.insert(key_at, format!("\"key\": {}", key_value(key)));
+                    "undefined".to_owned()
+                }
+                Some(key) => key_value(key),
+                None => "undefined".to_owned(),
+            };
+            let rest = values.get(1..).unwrap_or_default().join(", ");
+            return format!("__tsx2rs_el({{{}}}, [{rest}], {maybe})", entries.join(", "));
+        }
+        match key {
+            Some(Key::Dynamic(_)) => format!(
+                "__tsx2rs_keyed([{}], {})",
+                values.join(", "),
+                key.map(key_value).unwrap_or_default()
+            ),
+            Some(Key::Static(key)) => format!(
+                "[{}]",
+                [json_key(key)]
+                    .into_iter()
+                    .chain(values)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            None => format!(
+                "[{}]",
+                ["null".to_owned()]
+                    .into_iter()
+                    .chain(values)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
     }
 
     /// A props object as JSX builds it: in order, spreads included.

@@ -5,8 +5,13 @@ expression: functions
 
 // tsx2rs data functions (generated): each returns its template's record.
 const __tsx2rs_key = (key) => (key === undefined ? null : "" + key);
+const __tsx2rs_keyed = (record, key) => [__tsx2rs_key(key), ...record];
+const __tsx2rs_el = (config, record, key) => {
+  const { key: own, ...props } = config;
+  return [own === undefined ? __tsx2rs_key(key) : "" + own, props, ...record];
+};
 export const __tsx2rs_data_Box = function Box({ children, title }) {
-  return [(title), (children)];
+  return [[null, (title), (children)]];
 };
 export const __tsx2rs_data_Page = function Page({ t, c }) {
   return [[{"title": [(log("title", t))], "children": [(log("child", c))]}, undefined]];

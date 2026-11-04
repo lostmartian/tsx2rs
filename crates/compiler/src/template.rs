@@ -105,6 +105,9 @@ pub struct Element {
     pub tag: String,
     /// Its key.
     pub key: Option<Key>,
+    /// Where the key is written: the number of props before it. After a spread, the JSX
+    /// transform passes it inside the props object (`createElement`), so it's evaluated there.
+    pub key_at: usize,
     /// Its props in source order, `key` excluded.
     pub props: Vec<Prop>,
     /// Its children, after JSX's whitespace rules.
@@ -653,10 +656,14 @@ impl Extractor<'_> {
             return self.component(element);
         };
         let mut key = None;
+        let mut key_at = 0;
         let mut props = Vec::new();
         for item in &opening.attributes {
             match Self::prop(item) {
-                PropOrKey::Key(k) => key = Some(k),
+                PropOrKey::Key(k) => {
+                    key = Some(k);
+                    key_at = props.len();
+                }
                 PropOrKey::Prop(p) => props.push(p),
             }
         }
@@ -683,6 +690,7 @@ impl Extractor<'_> {
         Node::Element(Element {
             tag,
             key,
+            key_at,
             props,
             children,
             span,

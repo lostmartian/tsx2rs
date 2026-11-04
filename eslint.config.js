@@ -28,4 +28,13 @@ export default defineConfig(
       },
     },
   },
+  {
+    // Component fixtures exercise JavaScript's own semantics (`||` beside `??`, values the
+    // types say can't be nullish), which these rules would rewrite away.
+    files: ["tests/differential/components/**"],
+    rules: {
+      "@typescript-eslint/prefer-nullish-coalescing": "off",
+      "@typescript-eslint/no-unnecessary-condition": "off",
+    },
+  },
 );

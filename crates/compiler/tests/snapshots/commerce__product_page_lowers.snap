@@ -4,11 +4,11 @@ expression: out
 ---
 app/product/[handle]/page.tsx ProductPage: 14 ops, 11 chunks, 1 record slots
 app/product/[handle]/page.tsx RelatedProducts: 18 ops, 17 chunks, 1 record slots
-components/grid/tile.tsx GridTileImage: 19 ops, 13 chunks, 6 record slots
-components/layout/footer.tsx Footer: 20 ops, 19 chunks, 8 record slots
+components/grid/tile.tsx GridTileImage: 19 ops, 13 chunks, 3 record slots
+components/layout/footer.tsx Footer: 20 ops, 19 chunks, 3 record slots
 components/product/product-description.tsx ProductDescription: 14 ops, 10 chunks, 5 record slots
-components/label.tsx Label: 13 ops, 13 chunks, 6 record slots
-components/logo-square.tsx LogoSquare: 11 ops, 11 chunks, 5 record slots
-components/price.tsx Price: 15 ops, 14 chunks, 7 record slots
+components/label.tsx Label: 13 ops, 13 chunks, 3 record slots
+components/logo-square.tsx LogoSquare: 11 ops, 11 chunks, 3 record slots
+components/price.tsx Price: 15 ops, 14 chunks, 3 record slots
 components/prose.tsx Prose: 1 ops, 0 chunks, 1 record slots
-components/icons/logo.tsx LogoIcon: 9 ops, 8 chunks, 4 record slots
+components/icons/logo.tsx LogoIcon: 9 ops, 8 chunks, 3 record slots

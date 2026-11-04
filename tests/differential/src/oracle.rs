@@ -20,8 +20,9 @@ pub struct Oracle {
     html: Process,
 }
 
+/// A long-lived Node.js process answering one JSON request per line.
 #[derive(Debug)]
-struct Process {
+pub(crate) struct Process {
     _child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
@@ -29,6 +30,12 @@ struct Process {
 
 impl Process {
     fn spawn(mode: &str) -> std::io::Result<Self> {
+        Self::spawn_script("oracle/oracle.ts", mode)
+    }
+
+    /// Starts `script` (relative to this crate) in `mode`: `flight` runs it under the
+    /// `react-server` condition.
+    pub(crate) fn spawn_script(script: &str, mode: &str) -> std::io::Result<Self> {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut command = Command::new("node");
         command.arg("--no-warnings");
@@ -36,7 +43,7 @@ impl Process {
             command.arg("--conditions=react-server");
         }
         let mut child = command
-            .arg("oracle/oracle.ts")
+            .arg(script)
             .arg(mode)
             .current_dir(dir)
             .env("NODE_ENV", "production")
@@ -59,7 +66,8 @@ impl Process {
         })
     }
 
-    fn ask(&mut self, request: &str) -> std::io::Result<String> {
+    /// Sends one request line and reads one response line.
+    pub(crate) fn ask(&mut self, request: &str) -> std::io::Result<String> {
         self.stdin.write_all(request.as_bytes())?;
         self.stdin.write_all(b"\n")?;
         self.stdin.flush()?;

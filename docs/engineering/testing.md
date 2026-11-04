@@ -22,6 +22,7 @@ tsx2rs makes one promise: **output identical to Next.js, faster**. The tests are
 - Any mismatch becomes a minimized, permanent regression test.
 - Lives in [`tests/differential`](../../tests/differential/README.md): generated trees are rendered by the engine and by React DOM's server and React's Flight server, then compared.
 - This is how we keep up with React's rules (text separators, attribute quirks, escaping) instead of re-deriving them by hand.
+- **Component fixtures** in the same crate run the whole compiler: each `components/*.tsx` is compiled, its data functions run in Node.js and encoded, and the engine's output compared with React rendering the original component (ADR-0015). Every supported construct gets one.
 
 **Next.js is the oracle for everything else.** The identity harness builds each fixture app with `next build`, starts `next start` and the tsx2rs runtime side by side, requests the same URLs, and compares:
 - **HTML:** byte-identical after applying streamed `<Suspense>` boundaries the way the browser does, with Flight script tags removed.

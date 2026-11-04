@@ -110,8 +110,23 @@ pub enum Slot {
     /// Which `return` ran, as a chain of conditions, then that return's record. One return is
     /// just its record.
     Returns(Vec<(Range, Vec<Self>)>),
-    /// The root element's Flight key, computed by the runtime from the key path (ADR-0008).
-    RootKey,
+    /// An element whose key is known only at runtime: a component's root element (the runtime
+    /// puts its key path in front, ADR-0008), an element with a dynamic key, or one with a
+    /// spread (which may hold a `key`). Its value is `[key, ...record]`: the element's key as
+    /// React's `jsx(type, config, key)` takes it (`null` or a string), evaluated where the JSX
+    /// transform evaluates it, then the element's own record. `Op::Value` reads the key.
+    Keyed {
+        /// Whether it's a component's root element.
+        root: bool,
+        /// The key as written.
+        key: Option<Key>,
+        /// Where the key is written among the props (`Element::key_at`).
+        key_at: usize,
+        /// The props as written (a spread before the key puts the key inside them).
+        props: Vec<Prop>,
+        /// The element's record: its props, then its children.
+        record: Vec<Self>,
+    },
     /// Whether React's Flight wraps the root element in an array (ADR-0008), computed by the
     /// runtime; read once before the element and once after it.
     RootWrap,
@@ -141,8 +156,6 @@ pub enum ValueKind {
     FlightOnly,
     /// `Op::Child`: a React node.
     Child,
-    /// `Op::Value`: an element's key, `String(key)`.
-    Key,
 }
 
 /// What a branch's condition tests.
@@ -678,14 +691,27 @@ impl Lowering<'_> {
     /// a list callback isn't a component, so its elements don't.
     fn template(&mut self, node: &Node, root: bool) -> Result<Vec<Slot>, LowerError> {
         let mut record = Vec::new();
-        if let (Node::Element(element), true) = (node, root) {
-            self.wrap(&mut record, b"[");
-            self.element(element, &mut record, true)?;
-            self.wrap(&mut record, b"]");
+        if root {
+            self.root_node(node, &mut record)?;
         } else {
             self.node(node, &mut record)?;
         }
         Ok(record)
+    }
+
+    /// A node a component returns: an element there, directly or through a conditional, is the
+    /// component's own output, so it gets the runtime's key path and wrap (ADR-0008).
+    fn root_node(&mut self, node: &Node, record: &mut Vec<Slot>) -> Result<(), LowerError> {
+        match node {
+            Node::Element(element) => {
+                self.wrap(record, b"[");
+                self.element(element, record, true)?;
+                self.wrap(record, b"]");
+                Ok(())
+            }
+            Node::Conditional(conditional) => self.conditional(conditional, record, true),
+            node => self.node(node, record),
+        }
     }
 
     /// `If(wrap) [flight]`: half of React's implicit-slot array around a root element.
@@ -730,7 +756,7 @@ impl Lowering<'_> {
                 self.child(value.span, record);
                 Ok(())
             }
-            Node::Conditional(conditional) => self.conditional(conditional, record),
+            Node::Conditional(conditional) => self.conditional(conditional, record, false),
             Node::List(list) => self.list(list, record),
         }
     }
@@ -740,6 +766,7 @@ impl Lowering<'_> {
         &mut self,
         conditional: &crate::template::Conditional,
         record: &mut Vec<Slot>,
+        root: bool,
     ) -> Result<(), LowerError> {
         let test = conditional.test;
         let (kind, then, otherwise) = match conditional.condition {
@@ -771,7 +798,7 @@ impl Lowering<'_> {
                 Branch::Node(&conditional.consequent),
             ),
         };
-        self.branch(kind, test, then, otherwise, record)
+        self.branch(kind, test, (then, otherwise), record, root)
     }
 
     /// `xs.map(…)`: a `Loop` over the callback's returns.
@@ -837,19 +864,19 @@ impl Lowering<'_> {
         &mut self,
         test: Test,
         span: Range,
-        then: Branch<'_>,
-        otherwise: Branch<'_>,
+        (then, otherwise): (Branch<'_>, Branch<'_>),
         record: &mut Vec<Slot>,
+        root: bool,
     ) -> Result<(), LowerError> {
         let at = self.placeholder(Op::If { else_: OpIndex(0) });
         let mut then_record = Vec::new();
-        self.branch_body(then, &mut then_record)?;
+        self.branch_body(then, &mut then_record, root)?;
         self.flush();
         let jump = self.here();
         self.ops.push(Op::Jump { to: OpIndex(0) });
         let else_ = self.here();
         let mut otherwise_record = Vec::new();
-        self.branch_body(otherwise, &mut otherwise_record)?;
+        self.branch_body(otherwise, &mut otherwise_record, root)?;
         self.flush();
         let end = self.here();
         self.ops[at] = Op::If { else_ };
@@ -867,8 +894,10 @@ impl Lowering<'_> {
         &mut self,
         branch: Branch<'_>,
         record: &mut Vec<Slot>,
+        root: bool,
     ) -> Result<(), LowerError> {
         match branch {
+            Branch::Node(node) if root => self.root_node(node, record),
             Branch::Node(node) => self.node(node, record),
             Branch::Value(span) => {
                 self.child(span, record);
@@ -937,24 +966,41 @@ impl Lowering<'_> {
             ElementRules::Generic
         };
         self.structure(&tag.html_open, &tag.flight_open);
-        match (&e.key, root) {
-            (_, true) => {
-                self.op(Op::Value);
-                record.push(Slot::RootKey);
-            }
-            (Some(Key::Dynamic(span)), false) => {
-                self.op(Op::Value);
-                record.push(Slot::Value {
-                    kind: ValueKind::Key,
-                    span: *span,
-                });
-            }
-            (Some(Key::Static(key)), false) => self.structure(b"", &fold::key(Some(key))),
-            (None, false) => self.structure(b"", &fold::key(None)),
+        let spread = e.props.iter().any(|p| matches!(p, Prop::Spread(_)));
+        let keyed = root || spread || matches!(e.key, Some(Key::Dynamic(_)));
+        match &e.key {
+            _ if keyed => self.op(Op::Value),
+            Some(Key::Static(key)) => self.structure(b"", &fold::key(Some(key))),
+            _ => self.structure(b"", &fold::key(None)),
         }
+        let mut own = Vec::new();
+        self.element_body(e, &tag, rules, spread, &mut own)?;
+        if keyed {
+            record.push(Slot::Keyed {
+                root,
+                key: e.key.clone(),
+                key_at: e.key_at,
+                props: e.props.clone(),
+                record: own,
+            });
+        } else {
+            record.extend(own);
+        }
+        Ok(())
+    }
+
+    /// An element after its key: its props, children and end.
+    fn element_body(
+        &mut self,
+        e: &Element,
+        tag: &fold::Tag,
+        rules: ElementRules,
+        spread: bool,
+        record: &mut Vec<Slot>,
+    ) -> Result<(), LowerError> {
         self.structure(b"", b",{");
         let has_children = !e.children.is_empty();
-        let wrote_props = if e.props.iter().any(|p| matches!(p, Prop::Spread(_))) {
+        let wrote_props = if spread {
             // A spread: the whole props object, as JSX builds it, classified at runtime.
             self.op(Op::Attributes {
                 rules,
