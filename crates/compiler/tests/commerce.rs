@@ -185,3 +185,29 @@ fn templates(entry: &str) -> String {
 fn product_page_templates() {
     insta::assert_snapshot!(templates("app/product/[handle]/page.tsx"));
 }
+
+/// Every server component of the product page lowered: its program's size and its record's.
+#[test]
+fn product_page_lowers() {
+    use tsx2rs_compiler::lower;
+    let graph = build(&app(), Path::new("app/product/[handle]/page.tsx")).unwrap();
+    let mut out = String::new();
+    for module in graph.modules.iter().filter(|m| !m.components.is_empty()) {
+        for component in &module.components {
+            let name = component.name.as_deref().unwrap_or("(default)");
+            match lower::component(component) {
+                Ok(lowered) => writeln!(
+                    out,
+                    "{} {name}: {} ops, {} chunks, {} record slots",
+                    module.path,
+                    lowered.program.ops().len(),
+                    lowered.program.chunks().len(),
+                    lowered.record.len()
+                )
+                .unwrap(),
+                Err(e) => writeln!(out, "{} {name}: ERROR {e}", module.path).unwrap(),
+            }
+        }
+    }
+    insta::assert_snapshot!(out);
+}

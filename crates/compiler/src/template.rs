@@ -108,12 +108,12 @@ pub enum Key {
 /// A prop as written.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Prop {
-    /// A literal: its name and JSON (`"plain"`, `true`, `42`, `null`).
+    /// A literal.
     Static {
         /// The name.
         name: String,
-        /// The JSON.
-        json: String,
+        /// The value.
+        value: Value,
     },
     /// An expression.
     Dynamic {
@@ -124,6 +124,32 @@ pub enum Prop {
     },
     /// `{...props}`.
     Spread(Range),
+}
+
+/// A literal prop value.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Value {
+    /// A string.
+    String(String),
+    /// A finite number.
+    Number(f64),
+    /// `true` / `false` (a prop written without a value is `true`).
+    Bool(bool),
+    /// `null`
+    Null,
+}
+
+impl Value {
+    /// The value as `JSON.stringify` writes it.
+    #[must_use]
+    pub fn json(&self) -> String {
+        match self {
+            Self::String(s) => json_string(s),
+            Self::Number(n) => json_number(*n).unwrap_or_else(|| "null".into()),
+            Self::Bool(b) => b.to_string(),
+            Self::Null => "null".into(),
+        }
+    }
 }
 
 /// Why JSX stays an element value.
@@ -137,6 +163,8 @@ pub enum Reason {
     Context,
     /// It sets `dangerouslySetInnerHTML` or an explicit `children` prop.
     Content,
+    /// It has a `ref`, which React's Flight server rejects unless it's `null`.
+    Ref,
 }
 
 /// JSX kept as real JSX.
@@ -515,6 +543,9 @@ impl Extractor {
         if named("dangerouslySetInnerHTML") || named("children") {
             return element_value(Reason::Content);
         }
+        if named("ref") {
+            return element_value(Reason::Ref);
+        }
         if changes_context(&tag) && children.iter().any(has_runtime_part) {
             return element_value(Reason::Context);
         }
@@ -595,16 +626,18 @@ impl Extractor {
         };
         let name = attribute_name(&attribute.name);
         let value = match &attribute.value {
-            None => Ok("true".to_owned()), // <input disabled />
-            Some(JSXAttributeValue::StringLiteral(s)) => {
-                s.value.as_str().map(json_string).ok_or(range(s.span))
-            }
+            None => Ok(Value::Bool(true)), // <input disabled />
+            Some(JSXAttributeValue::StringLiteral(s)) => s
+                .value
+                .as_str()
+                .map(|v| Value::String(v.to_owned()))
+                .ok_or(range(s.span)),
             // The parser rejects an empty `{}` prop value, so the expression is there.
             Some(JSXAttributeValue::ExpressionContainer(container)) => container
                 .expression
                 .as_expression()
                 .map_or(Err(range(container.span)), |expression| {
-                    literal_json(expression).ok_or(range(expression.span()))
+                    literal_value(expression).ok_or(range(expression.span()))
                 }),
             Some(other) => Err(range(other.span())),
         };
@@ -624,7 +657,7 @@ impl Extractor {
             });
         }
         PropOrKey::Prop(match value {
-            Ok(json) => Prop::Static { name, json },
+            Ok(value) => Prop::Static { name, value },
             Err(value) => Prop::Dynamic { name, value },
         })
     }
@@ -766,25 +799,27 @@ fn changes_context(tag: &str) -> bool {
     )
 }
 
-/// The JSON of a literal expression, or `None`.
-fn literal_json(expression: &Expression<'_>) -> Option<String> {
+/// A literal expression's value, or `None` if it isn't one (or is a lone surrogate, which only
+/// reading it at runtime gets right).
+fn literal_value(expression: &Expression<'_>) -> Option<Value> {
+    let string = |s: Option<&str>| s.map(|s| Value::String(s.to_owned()));
     match expression {
-        Expression::StringLiteral(s) => s.value.as_str().map(json_string),
-        Expression::NumericLiteral(n) => json_number(n.value),
-        Expression::BooleanLiteral(b) => Some(b.value.to_string()),
-        Expression::NullLiteral(_) => Some("null".into()),
-        Expression::TemplateLiteral(t) if t.expressions.is_empty() => t
-            .quasis
-            .first()
-            .and_then(|q| q.value.cooked.as_ref()?.as_str())
-            .map(json_string),
+        Expression::StringLiteral(s) => string(s.value.as_str()),
+        Expression::NumericLiteral(n) => Some(Value::Number(n.value)),
+        Expression::BooleanLiteral(b) => Some(Value::Bool(b.value)),
+        Expression::NullLiteral(_) => Some(Value::Null),
+        Expression::TemplateLiteral(t) if t.expressions.is_empty() => string(
+            t.quasis
+                .first()
+                .and_then(|q| q.value.cooked.as_ref()?.as_str()),
+        ),
         Expression::UnaryExpression(u) if u.operator == UnaryOperator::UnaryNegation => {
             match &u.argument {
-                Expression::NumericLiteral(n) => json_number(-n.value),
+                Expression::NumericLiteral(n) => Some(Value::Number(-n.value)),
                 _ => None,
             }
         }
-        Expression::ParenthesizedExpression(e) => literal_json(&e.expression),
+        Expression::ParenthesizedExpression(e) => literal_value(&e.expression),
         _ => None,
     }
 }

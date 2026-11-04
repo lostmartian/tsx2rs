@@ -9,6 +9,7 @@
 pub mod component;
 pub mod diagnostic;
 pub mod graph;
+pub mod lower;
 pub mod template;
 pub mod usage;
 

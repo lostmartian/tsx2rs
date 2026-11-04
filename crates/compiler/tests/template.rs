@@ -65,7 +65,7 @@ fn print_props(source: &str, props: &[Prop]) -> String {
     props
         .iter()
         .map(|p| match p {
-            Prop::Static { name, json } => format!(" {name}={json}"),
+            Prop::Static { name, value } => format!(" {name}={}", value.json()),
             Prop::Dynamic { name, value } => format!(" {name}={{{}}}", text(source, *value)),
             Prop::Spread(span) => format!(" {{...{}}}", text(source, *span)),
         })

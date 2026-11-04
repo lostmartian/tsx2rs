@@ -31,6 +31,70 @@ pub struct FoldedProps {
     pub flight: Vec<u8>,
 }
 
+/// A host element's edges, for template markup: what goes around its props and children.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tag {
+    /// `<div`: the props' attributes follow.
+    pub html_open: Vec<u8>,
+    /// `>` then the children then `</div>`, or `/>` for a void element: what closes it.
+    pub html_close: Vec<u8>,
+    /// A void element (`br`, `hr`, …): written `<tag …/>`, without children.
+    pub void: bool,
+    /// `["$","div",`: the key follows, then `,{`, the props, and `}]`.
+    pub flight_open: Vec<u8>,
+}
+
+/// The edges of a host element React DOM writes with the generic rules.
+///
+/// # Errors
+///
+/// [`FoldError::NotGeneric`] for an invalid tag or one with rules of its own (`input`, `img`,
+/// `title`, …): the compiler keeps those as element values (ADR-0012).
+pub fn tag(name: &str) -> Result<Tag, FoldError> {
+    let void = crate::render::generic_element(name).ok_or(FoldError::NotGeneric)?;
+    let mut html_open = b"<".to_vec();
+    html_open.extend_from_slice(name.as_bytes());
+    let html_close = if void {
+        b"/>".to_vec()
+    } else {
+        let mut close = b"</".to_vec();
+        close.extend_from_slice(name.as_bytes());
+        close.push(b'>');
+        close
+    };
+    let mut flight_open = b"[\"$\",\"".to_vec();
+    flight_open.extend_from_slice(name.as_bytes()); // a valid tag needs no escaping
+    flight_open.extend_from_slice(b"\",");
+    Ok(Tag {
+        html_open,
+        html_close,
+        void,
+        flight_open,
+    })
+}
+
+/// An element's Flight key: `null`, or the key as React's Flight server writes it (a JSON
+/// string, a leading `$` escaped).
+#[must_use]
+pub fn key(key: Option<&str>) -> Vec<u8> {
+    let mut out = Vec::new();
+    match key {
+        Some(key) => crate::flight::string(&mut out, key),
+        None => out.extend_from_slice(b"null"),
+    }
+    out
+}
+
+/// A prop's Flight key, `"name":`, as React's Flight server writes object keys (`JSON.stringify`,
+/// no `$` escaping).
+#[must_use]
+pub fn prop_key(name: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    crate::flight::key(&mut out, name);
+    out.push(b':');
+    out
+}
+
 /// Why something can't be folded.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum FoldError {
@@ -41,6 +105,9 @@ pub enum FoldError {
     /// compiler keeps such elements as element values (ADR-0011).
     #[error("hoists into the head or emits a resource hint")]
     Hoists,
+    /// An invalid tag, or one React DOM writes by rules of its own: not template markup.
+    #[error("not an element with React DOM's generic rules")]
+    NotGeneric,
     /// The folding program itself is invalid (a bug in this module).
     #[error("invalid folding program: {0}")]
     Program(#[from] FormatError),

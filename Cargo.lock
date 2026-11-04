@@ -1818,6 +1818,7 @@ dependencies = [
  "oxc_syntax",
  "ryu-js",
  "thiserror",
+ "tsx2rs_engine",
  "tsx2rs_ir",
 ]
 

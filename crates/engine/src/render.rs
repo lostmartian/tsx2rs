@@ -2,6 +2,8 @@
 
 mod element;
 
+pub(crate) use element::generic_element;
+
 use crate::head::Head;
 use crate::hints::Hints;
 use crate::input::{Input, Primitive};
