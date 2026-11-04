@@ -53,6 +53,7 @@ Runs template programs.
 - **One pass, two outputs:** it walks the ops once, reading each input value once, and writes HTML by React DOM's server rules and Flight by React's Flight rules at the same time.
 - **Escaping lives here and only here:** text and attributes, Flight strings, and Flight for inline `<script>` tags (`script_string`).
 - **Hoisting** (`head.rs`, [ADR-0010](docs/adr/0010-hoisting-into-head.md)): what React DOM hoists into `<head>` (titles, meta, links, stylesheets by precedence, `async` scripts, image preloads) is collected into `Output::head`, in React's queues and with its deduplication; the runtime places it in the document's `<head>`.
+- **Folding** (`fold.rs`, [ADR-0012](docs/adr/0012-compiling-templates.md)): at build time, the compiler's static nodes and props rendered by the same code as at runtime, for `Op::Static` chunks.
 - **Flight resource hints** (`hints.rs`, [ADR-0011](docs/adr/0011-flight-resource-hints.md)): the `:HL`/`:Hm` rows React's Flight server emits for `<img>` and `<link>` elements, deduplicated per request, in `Output::hints`.
 - **Element values** (`render/element.rs`): host elements that reach a hole at runtime, written by React DOM's rules for their type (`input`, `select`/`option`, `textarea`, custom elements, in-place `<script>`/`<style>`/`<title>`/`<meta>`/`<link>`, …), with the context their descendants need (the enclosing `<select>`'s value, SVG mode, `<noscript>` and `<picture>` scopes).
 - **Input is untrusted:** it is checked as it is read (lengths, tags, UTF-8, nesting depth, leftover bytes), and failures are typed errors, never panics.
@@ -98,7 +99,7 @@ The only bridge to Node.js (napi-rs). Thin: converts arguments, calls `compiler`
 These hold everywhere. A change that breaks one needs an ADR.
 
 1. **Identical or fall back.** For a compiled route, the HTML (after applying streamed boundaries) and the decoded Flight tree are identical to Next.js's. When the compiler or runtime can't guarantee that, the request goes to Next.js. An error at request time also falls back (or returns 500 if headers were already sent), never partial wrong output.
-2. **Layering:** `ir` ← `compiler`, `ir` ← `engine`, `{compiler, engine}` ← `napi` ← `packages/*`.
+2. **Layering:** `ir` ← `engine` ← `compiler`, `{compiler, engine}` ← `napi` ← `packages/*`. The compiler uses the engine only at build time, to fold static markup ([ADR-0012](docs/adr/0012-compiling-templates.md)).
    - The engine never depends on the compiler (it can ship alone in Stage B).
    - Packages never reach into crate internals.
    - No dependency cycles.
