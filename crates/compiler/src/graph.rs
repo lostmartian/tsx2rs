@@ -328,7 +328,11 @@ impl Builder {
 
         self.modules[id.0].exports = exports(&module_record);
         self.modules[id.0].component_uses = crate::component::collect(&program);
-        let (components, problems) = crate::template::extract(&program);
+        let scoping = oxc_semantic::SemanticBuilder::new()
+            .build(&program)
+            .semantic
+            .into_scoping();
+        let (components, problems) = crate::template::extract(&program, &scoping);
         self.modules[id.0].components = components;
         for problem in problems {
             self.diagnostic(Code::UnsupportedJsx, problem.message, &file, problem.span);

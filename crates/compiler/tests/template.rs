@@ -190,6 +190,25 @@ const lower = () => <p>not a component either</p>;
 }
 
 #[test]
+fn finds_default_exports_by_name() {
+    insta::assert_snapshot!(templates(
+        r"
+export default Later;
+const Price = () => <p>a</p>;
+function Later() { return <p>b</p>; }
+const Other = () => <p>c</p>;
+export { Other as Renamed };
+"
+    ));
+    insta::assert_snapshot!(templates(
+        r"
+const Price = () => <p>a</p>;
+export { Price as default };
+"
+    ));
+}
+
+#[test]
 fn builds_elements_with_static_dynamic_and_spread_props() {
     insta::assert_snapshot!(templates(
         r#"

@@ -10,6 +10,7 @@ use std::fmt::Write as _;
 use std::process::Command;
 
 use common::Project;
+use tsx2rs_compiler::graph::ModuleId;
 use tsx2rs_compiler::{data, lower};
 
 /// The data functions of `source`'s components (a module `app/page.jsx`).
@@ -25,10 +26,8 @@ fn generated(source: &str) -> (String, String) {
     let graph = p.graph("app/page.jsx");
     assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
     let module = &graph.modules[0];
-    let lowered: Vec<_> = module
-        .components
-        .iter()
-        .map(|c| lower::component(c).unwrap())
+    let lowered: Vec<_> = (0..module.components.len())
+        .map(|i| lower::linked(&graph, ModuleId(0), i).unwrap())
         .collect();
     let pairs: Vec<_> = module
         .components
@@ -180,5 +179,44 @@ fn indexes_several_returns_and_builds_spread_props() {
             "m.__tsx2rs_data_P({ p: 'i', rest: { target: '_blank', id: 'over' } })"
         ),
         r#"[1,[{"href":"/x","data-n":2,"id":"over","target":"_blank"}]]"#
+    );
+}
+
+#[test]
+fn writes_a_linked_child_as_a_pending_call() {
+    // Evaluation order as Next.js's SWC compiles it: a key after a spread goes inside the props
+    // (`createElement(C, {..., key: k(), ...})`); otherwise it's `jsx(C, {...}, k())`, after them.
+    let source = r#"let order = [];
+const log = (name, v) => { order.push(name); return v; };
+function Label({ text, n, children }) {
+  log("Label");
+  return <b>{text}{n}{children}</b>;
+}
+export default function Page({ t, k, rest }) {
+  return (
+    <p>
+      <Label text={log("text", t)} {...rest} key={log("key", k)} n={2}>a {log("child", t)}</Label>
+      <Label key={log("key2", k)} text={log("text2", t)} />
+      <Label>only</Label>
+      {log("after", "!")}
+    </p>
+  );
+}
+export const order_seen = () => order;
+"#;
+    let (functions, module) = generated(source);
+    insta::assert_snapshot!(functions);
+    // `Label` itself hasn't run: the runtime calls it once the record is complete, as React
+    // calls children after their parent.
+    assert_eq!(
+        run(
+            &module,
+            "[m.__tsx2rs_data_Page({ t: 'T', k: 7, rest: { n: 1, x: true } }), m.order_seen()]"
+        ),
+        concat!(
+            r#"[[[{"text":"T","n":2,"x":true,"key":7,"children":["a ","T"]},"<undefined>"],"#,
+            r#"[{"text":"T"},7],[{"children":"only"},"<undefined>"],"!"],"#,
+            r#"["text","key","child","text2","key2","after"]]"#
+        )
     );
 }

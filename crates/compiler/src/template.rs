@@ -7,10 +7,12 @@
 use oxc_ast::ast::{
     Argument, ArrowFunctionBody, ArrowFunctionExpression, BindingPattern, CallExpression,
     Declaration, ExportDefaultDeclarationKind, Expression, Function, FunctionBody,
-    JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement, JSXElementName,
-    JSXMemberExpressionObject, LogicalOperator, Program, Statement, UnaryOperator,
+    IdentifierReference, JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild,
+    JSXElement, JSXElementName, JSXMemberExpressionObject, LogicalOperator, Program, Statement,
+    UnaryOperator,
 };
 use oxc_ast_visit::{Visit, walk};
+use oxc_semantic::Scoping;
 use oxc_span::{GetSpan, Span};
 use oxc_syntax::scope::ScopeFlags;
 
@@ -224,8 +226,14 @@ pub struct ComponentElement {
     pub name: String,
     /// For `<ui.Button>`: `Button`.
     pub member: Option<String>,
+    /// Whether `name` is a module-level binding (an import or a top-level declaration), so it
+    /// refers to what the module graph says: only then can the element be linked.
+    pub module_scope: bool,
     /// Its key.
     pub key: Option<Key>,
+    /// Where the key is written: the number of props before it. After a spread, the JSX
+    /// transform passes it inside the props object (`createElement`), so it's evaluated there.
+    pub key_at: usize,
     /// Its props in source order: a prop whose value is JSX in a template position is a slot.
     pub props: Vec<ComponentProp>,
     /// Its children (the `children` slot).
@@ -258,21 +266,48 @@ pub struct Problem {
 }
 
 /// The server components a module defines at its top level, with their templates, and what
-/// can't be compiled.
+/// can't be compiled. `scoping` is the module's (`oxc_semantic`): it tells which component tags
+/// refer to module-level bindings.
 #[must_use]
-pub fn extract(program: &Program<'_>) -> (Vec<Component>, Vec<Problem>) {
+pub fn extract(program: &Program<'_>, scoping: &Scoping) -> (Vec<Component>, Vec<Problem>) {
     let mut extractor = Extractor {
         problems: Vec::new(),
+        scoping,
     };
     let mut components = Vec::new();
     for statement in &program.body {
         extractor.statement(statement, &mut components);
     }
+    // `export default Price;` or `export { Price as default };`, before or after its definition.
+    for name in program.body.iter().filter_map(default_export_name) {
+        for component in &mut components {
+            if component.name.as_deref() == Some(name) {
+                component.default_export = true;
+            }
+        }
+    }
     (components, extractor.problems)
 }
 
-struct Extractor {
+/// The local name a statement exports as the default, when it names a binding.
+fn default_export_name<'a>(statement: &'a Statement<'_>) -> Option<&'a str> {
+    match statement {
+        Statement::ExportDefaultDeclaration(export) => match &export.declaration {
+            ExportDefaultDeclarationKind::Identifier(id) => Some(id.name.as_str()),
+            _ => None,
+        },
+        Statement::ExportNamedDeclaration(export) => export
+            .specifiers
+            .iter()
+            .find(|s| s.exported.name() == "default")
+            .map(|s| s.local.name().as_str()),
+        _ => None,
+    }
+}
+
+struct Extractor<'s> {
     problems: Vec<Problem>,
+    scoping: &'s Scoping,
 }
 
 /// A function that may be a component.
@@ -282,7 +317,7 @@ enum Candidate<'b, 'a> {
     Arrow(&'b ArrowFunctionExpression<'a>),
 }
 
-impl Extractor {
+impl Extractor<'_> {
     fn statement(&mut self, statement: &Statement<'_>, out: &mut Vec<Component>) {
         match statement {
             Statement::FunctionDeclaration(function) => {
@@ -558,21 +593,34 @@ impl Extractor {
         })
     }
 
+    /// Whether `id` refers to a binding declared at module level (an import or a top-level
+    /// declaration), not a parameter, a local or a global.
+    fn module_scope(&self, id: &IdentifierReference<'_>) -> bool {
+        id.reference_id
+            .get()
+            .and_then(|reference| self.scoping.get_reference(reference).symbol_id())
+            .is_some_and(|symbol| {
+                self.scoping.symbol_scope_id(symbol) == self.scoping.root_scope_id()
+            })
+    }
+
     fn component(&mut self, element: &JSXElement<'_>) -> Node {
         let opening = &element.opening_element;
-        let (name, member) = match &opening.name {
-            JSXElementName::IdentifierReference(id) => (id.name.as_str().to_owned(), None),
+        let (name, member, module_scope) = match &opening.name {
+            JSXElementName::IdentifierReference(id) => {
+                (id.name.as_str().to_owned(), None, self.module_scope(id))
+            }
             JSXElementName::MemberExpression(m) => {
                 let mut path = vec![m.property.name.as_str().to_owned()];
                 let mut object = &m.object;
-                let name = loop {
+                let (name, module_scope) = loop {
                     match object {
                         JSXMemberExpressionObject::MemberExpression(inner) => {
                             path.push(inner.property.name.as_str().to_owned());
                             object = &inner.object;
                         }
                         JSXMemberExpressionObject::IdentifierReference(id) => {
-                            break id.name.as_str().to_owned();
+                            break (id.name.as_str().to_owned(), self.module_scope(id));
                         }
                         JSXMemberExpressionObject::ThisExpression(t) => {
                             self.problem("`this` in a JSX tag", t.span);
@@ -581,7 +629,7 @@ impl Extractor {
                     }
                 };
                 path.reverse();
-                (name, Some(path.join(".")))
+                (name, Some(path.join(".")), module_scope)
             }
             _ => {
                 self.problem("`this` as a JSX tag", opening.span);
@@ -589,6 +637,7 @@ impl Extractor {
             }
         };
         let mut key = None;
+        let mut key_at = 0;
         let mut props = Vec::new();
         for item in &opening.attributes {
             if let JSXAttributeItem::Attribute(attribute) = item
@@ -603,14 +652,19 @@ impl Extractor {
                 continue;
             }
             match Self::prop(item) {
-                PropOrKey::Key(k) => key = Some(k),
+                PropOrKey::Key(k) => {
+                    key = Some(k);
+                    key_at = props.len();
+                }
                 PropOrKey::Prop(p) => props.push(ComponentProp::Value(p)),
             }
         }
         Node::Component(Box::new(ComponentElement {
             name,
             member,
+            module_scope,
             key,
+            key_at,
             props,
             children: self.children(&element.children),
             span: range(element.span),
@@ -866,12 +920,12 @@ fn json_string(s: &str) -> String {
 
 /// A function body's own `return`s, as templates; nested functions and classes are skipped.
 /// A bare `return;` is a hole: it renders `undefined`.
-struct Returns<'e> {
-    extractor: &'e mut Extractor,
+struct Returns<'e, 's> {
+    extractor: &'e mut Extractor<'s>,
     templates: Vec<Template>,
 }
 
-impl<'a> Visit<'a> for Returns<'_> {
+impl<'a> Visit<'a> for Returns<'_, '_> {
     fn visit_return_statement(&mut self, statement: &oxc_ast::ast::ReturnStatement<'a>) {
         let template = match &statement.argument {
             Some(argument) => self.extractor.template(argument),

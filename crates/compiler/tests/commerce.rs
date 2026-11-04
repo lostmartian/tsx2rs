@@ -211,3 +211,62 @@ fn product_page_lowers() {
     }
     insta::assert_snapshot!(out);
 }
+
+#[test]
+fn product_page_links() {
+    use tsx2rs_compiler::graph::ModuleId;
+    use tsx2rs_compiler::lower::{self, Slot};
+    /// The linked components in a record, by name, nested.
+    fn calls(graph: &tsx2rs_compiler::graph::ModuleGraph, record: &[Slot], out: &mut Vec<String>) {
+        for slot in record {
+            match slot {
+                Slot::Call {
+                    module,
+                    component,
+                    record,
+                    ..
+                } => {
+                    let callee = &graph.modules[module.0].components[*component];
+                    out.push(callee.name.clone().unwrap_or_default());
+                    calls(graph, record, out);
+                }
+                Slot::Branch {
+                    then, otherwise, ..
+                } => {
+                    calls(graph, then, out);
+                    calls(graph, otherwise, out);
+                }
+                Slot::List { item, .. } => calls(graph, std::slice::from_ref(item), out),
+                Slot::Returns(returns) => {
+                    for (_, record) in returns {
+                        calls(graph, record, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let graph = build(&app(), Path::new("app/product/[handle]/page.tsx")).unwrap();
+    let mut out = String::new();
+    for (m, module) in graph.modules.iter().enumerate() {
+        for (i, component) in module.components.iter().enumerate() {
+            let name = component.name.as_deref().unwrap_or("(default)");
+            match lower::linked(&graph, ModuleId(m), i) {
+                Ok(lowered) => {
+                    let mut linked = Vec::new();
+                    calls(&graph, &lowered.record, &mut linked);
+                    writeln!(
+                        out,
+                        "{} {name}: {} ops; links [{}]",
+                        module.path,
+                        lowered.program.ops().len(),
+                        linked.join(", ")
+                    )
+                    .unwrap();
+                }
+                Err(e) => writeln!(out, "{} {name}: ERROR {e}", module.path).unwrap(),
+            }
+        }
+    }
+    insta::assert_snapshot!(out);
+}

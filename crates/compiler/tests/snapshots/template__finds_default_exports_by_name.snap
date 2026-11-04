@@ -1,0 +1,16 @@
+---
+source: crates/compiler/tests/template.rs
+expression: "templates(r\"\nexport default Later;\nconst Price = () => <p>a</p>;\nfunction Later() { return <p>b</p>; }\nconst Other = () => <p>c</p>;\nexport { Other as Renamed };\n\")"
+---
+component Price
+  return 0:
+    <p>
+      text "a"
+component Later default
+  return 0:
+    <p>
+      text "b"
+component Other
+  return 0:
+    <p>
+      text "c"
