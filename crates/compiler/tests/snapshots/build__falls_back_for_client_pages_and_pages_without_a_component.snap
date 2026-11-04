@@ -1,0 +1,9 @@
+---
+source: crates/compiler/tests/build.rs
+expression: summary(&app)
+---
+app/client/page.tsx: falls back
+  app/client/page.tsx is a client page (`"use client"`)
+app/none/page.tsx: falls back
+  app/none/page.tsx has no default-exported component
+app/ok/page.tsx: compiled (140 program bytes, entry __tsx2rs_data_Page, 0 callees)

@@ -47,6 +47,8 @@ Source → templates + data functions → programs, in phases with one module ea
 7. **Lowering** (`lower`) to programs, with static parts folded by the engine, and each component's **record**: the values its data function writes, in program order (ADR-0015 for its final shape)
 8. **Encoder** (`encoder`): JavaScript generated from the same `Slot` trees, one straight-line function per template, that writes the records as the engine's input on `@tsx2rs/runtime/encode` ([ADR-0016](docs/adr/0016-generated-encoder.md)); the component fixtures check it against a reference and against React
 
+**`build`** runs the pipeline over an app's pages ([ADR-0017](docs/adr/0017-adapter-build.md)): each route compiles (program, encoder, the data functions it calls) or falls back with its reasons, and each server module gets the code the adapter's loader appends to it (its data functions and their registration).
+
 Each phase is a pure function of its input. Its **diagnostics** have a stable code, a message, a source span and a severity: an *error* makes the route fall back, and a *note* names a part that React renders at request time. The compiler never guesses.
 
 ### `crates/engine`
@@ -59,8 +61,8 @@ Runs template programs.
 - **Element values** (`render/element.rs`): host elements that reach a hole at runtime, written by React DOM's rules for their type (`input`, `select`/`option`, `textarea`, custom elements, in-place `<script>`/`<style>`/`<title>`/`<meta>`/`<link>`, …), with the context their descendants need (the enclosing `<select>`'s value, SVG mode, `<noscript>` and `<picture>` scopes).
 - **Input is untrusted:** it is checked as it is read (lengths, tags, UTF-8, nesting depth, leftover bytes), and failures are typed errors, never panics.
 
-### `crates/napi` *(planned)*
-The only bridge to Node.js (napi-rs). Thin: converts arguments, calls `compiler`/`engine`, maps errors. No logic. This is the only crate allowed `unsafe` (FFI), and it catches panics at the boundary.
+### `crates/napi`
+The only bridge to Node.js (napi-rs), published as `@tsx2rs/native`. Thin: converts arguments, calls `compiler`/`engine`, maps errors. No logic. It exports `compileApp` (the adapter's build, ADR-0017); rendering comes with the runtime. This is the only crate allowed `unsafe` (FFI), and it catches panics at the boundary.
 
 ### `packages/adapter` *(planned)*
 `@tsx2rs/adapter`: the Next.js Deployment Adapter.
@@ -80,8 +82,8 @@ The HTTP server is *planned* (step 8):
 - Image optimization
 - A cluster launcher (one process per vCPU)
 
-### `packages/native` *(planned)*
-`@tsx2rs/native`: the compiled napi binary as an npm package (prebuilt per platform after milestone 1).
+### `packages/native`
+`@tsx2rs/native`: the napi binary (`crates/napi`) as an npm package, built from source for now (`pnpm build:native`); prebuilt per platform after milestone 1.
 
 ### `tests/`
 - `identity/`: the harness that builds an app with Next.js, runs both servers, and compares output.
