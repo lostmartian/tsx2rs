@@ -28,6 +28,7 @@ impl Project {
         Self { root }
     }
 
+    #[allow(dead_code)] // each test file compiles this module; not all of them build graphs
     pub(crate) fn graph(&self, entry: &str) -> ModuleGraph {
         build(&self.root, Path::new(entry)).unwrap()
     }
