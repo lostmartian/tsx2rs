@@ -72,11 +72,23 @@ importers:
         specifier: 3.10.9
         version: 3.10.9(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@24.19.2)(supports-color@8.1.1)
 
+  packages/runtime:
+    devDependencies:
+      '@types/react':
+        specifier: 'catalog:'
+        version: 19.3.0
+      react:
+        specifier: 'catalog:'
+        version: 19.3.1
+
   tests/differential:
     dependencies:
       '@tsx2rs/identity':
         specifier: workspace:*
         version: link:../identity
+      '@tsx2rs/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
       next:
         specifier: 'catalog:'
         version: 16.4.3(@types/node@24.19.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)

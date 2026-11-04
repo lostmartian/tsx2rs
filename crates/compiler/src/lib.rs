@@ -9,6 +9,7 @@
 pub mod component;
 pub mod data;
 pub mod diagnostic;
+pub mod encoder;
 pub mod graph;
 pub mod lower;
 pub mod template;

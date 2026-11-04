@@ -1,0 +1,235 @@
+//! The generated encoder (ADR-0016): JavaScript that writes a route's records as the engine's
+//! input, one straight-line function per template, from the same `Slot` trees lowering made the
+//! program from (so their orders can't diverge). It runs on `@tsx2rs/runtime/encode`.
+//!
+//! Each slot of a record becomes a line or a small block reading that slot's value and writing
+//! it with the encoder for its kind; conditions, loops and the choice between returns become
+//! `if`s and `for`s. Pending calls run the callee's data function (from the `data` array, in the
+//! order of [`Encoder::callees`]) and write its record with the callee's body.
+
+use std::fmt::Write as _;
+
+use crate::graph::ModuleId;
+use crate::lower::{Body, Lowered, Slot, Test, ValueKind};
+
+/// A route's generated encoder.
+#[derive(Debug)]
+pub struct Encoder {
+    /// The JavaScript module: `export function encode(record, data)`, returning the input bytes.
+    pub source: String,
+    /// The data functions `data` must hold, in order: (module, component index).
+    pub callees: Vec<(ModuleId, usize)>,
+}
+
+/// The encoder for a lowered page: `record` is its data function's record.
+#[must_use]
+pub fn generate(lowered: &Lowered) -> Encoder {
+    let mut g = Generator {
+        out: String::new(),
+        callees: Vec::new(),
+        next: 0,
+        depth: 1,
+    };
+    g.out.push_str(
+        "// tsx2rs encoder (generated): writes the records as the engine's input (ADR-0016).\n\
+         import { ENTRY_KEYS, NO_KEYS, Input, attrs, call, node, primitive, rootKey, style, value } \
+         from \"@tsx2rs/runtime/encode\";\n\n\
+         export function encode(record, data) {\n  const w = new Input();\n  \
+         t0(w, record, ENTRY_KEYS, data);\n  return w.finish();\n}\n",
+    );
+    let templates = std::iter::once(&lowered.record).chain(&lowered.templates);
+    for (i, record) in templates.enumerate() {
+        let _ = write!(g.out, "\nfunction t{i}(w, r, k, data) {{\n");
+        g.record(record, "r", 0, "k", true);
+        g.out.push_str("}\n");
+    }
+    Encoder {
+        source: g.out,
+        callees: g.callees,
+    }
+}
+
+struct Generator {
+    out: String,
+    callees: Vec<(ModuleId, usize)>,
+    /// For unique variable names.
+    next: usize,
+    /// Indentation.
+    depth: usize,
+}
+
+impl Generator {
+    fn var(&mut self, prefix: &str) -> String {
+        self.next += 1;
+        format!("{prefix}{}", self.next)
+    }
+
+    fn line(&mut self, line: &str) {
+        for _ in 0..self.depth {
+            self.out.push_str("  ");
+        }
+        self.out.push_str(line);
+        self.out.push('\n');
+    }
+
+    fn block(&mut self, open: &str, body: impl FnOnce(&mut Self)) {
+        self.line(open);
+        self.depth += 1;
+        body(self);
+        self.depth -= 1;
+        self.line("}");
+    }
+
+    /// A record: the array `array`, whose values start at `offset`. `root`: the record of a
+    /// template's root, where a component element or a conditional is the component's output.
+    fn record(&mut self, slots: &[Slot], array: &str, offset: usize, keys: &str, root: bool) {
+        let own_output = root && matches!(slots, [Slot::Call { .. } | Slot::Branch { .. }]);
+        let mut index = offset;
+        let mut wrap: Option<String> = None;
+        for (i, slot) in slots.iter().enumerate() {
+            if let Slot::RootWrap = slot {
+                // Before the root element (the next slot, whose key is its value's first entry),
+                // and after it.
+                let name = if let Some(name) = &wrap {
+                    name.clone()
+                } else {
+                    let name = self.var("wrap");
+                    let next_is_root = matches!(slots.get(i + 1), Some(Slot::Keyed { .. }));
+                    let own = if next_is_root {
+                        format!("{array}[{index}][0] !== null")
+                    } else {
+                        "false".to_owned()
+                    };
+                    self.line(&format!("const {name} = {keys}.implicit && {own};"));
+                    wrap = Some(name.clone());
+                    name
+                };
+                self.line(&format!("w.condition({name});"));
+                continue;
+            }
+            self.slot(slot, &format!("{array}[{index}]"), keys, own_output);
+            index += 1;
+        }
+    }
+
+    fn slot(&mut self, slot: &Slot, v: &str, keys: &str, root: bool) {
+        match slot {
+            Slot::Value { kind, .. } => {
+                let encode = match kind {
+                    ValueKind::Child => "node",
+                    ValueKind::Prop => "primitive",
+                    ValueKind::Style => "style",
+                    ValueKind::FlightOnly => "value",
+                };
+                self.line(&format!("{encode}(w, {v});"));
+            }
+            Slot::Props { .. } => self.line(&format!("attrs(w, {v});")),
+            Slot::Keyed {
+                root: own, record, ..
+            } => {
+                let g = self.var("el");
+                self.line(&format!("const {g} = {v};"));
+                if *own {
+                    self.line(&format!("primitive(w, rootKey({keys}, {g}[0]));"));
+                } else {
+                    self.line(&format!("primitive(w, {g}[0]);"));
+                }
+                self.record(record, &g, 1, "NO_KEYS", false);
+            }
+            Slot::Branch {
+                test: Test::Present,
+                then,
+                ..
+            } => {
+                // A list item that reads nothing else: an always-true condition.
+                self.line("w.condition(true);");
+                if let [only] = then.as_slice() {
+                    self.slot(only, v, "NO_KEYS", false);
+                }
+            }
+            Slot::Branch {
+                then, otherwise, ..
+            } => {
+                let b = self.var("branch");
+                let inner = if root { keys } else { "NO_KEYS" };
+                self.line(&format!("const {b} = {v};"));
+                self.line(&format!("w.condition({b}[0]);"));
+                let record = format!("{b}[1]");
+                self.block(&format!("if ({b}[0]) {{"), |g| {
+                    g.record(then, &record, 0, inner, root);
+                });
+                self.block("else {", |g| g.record(otherwise, &record, 0, inner, root));
+            }
+            Slot::List { item, .. } => {
+                let (items, it) = (self.var("items"), self.var("item"));
+                self.line(&format!("const {items} = {v};"));
+                self.line(&format!("w.u32({items}.length);"));
+                self.block(&format!("for (const {it} of {items}) {{"), |g| {
+                    g.slot(item, &it, "NO_KEYS", false);
+                });
+            }
+            Slot::Returns(returns) => self.returns(returns, v, keys),
+            Slot::Call {
+                module,
+                component,
+                body,
+                ..
+            } => {
+                let callee = (*module, *component);
+                let index = self
+                    .callees
+                    .iter()
+                    .position(|c| *c == callee)
+                    .unwrap_or_else(|| {
+                        self.callees.push(callee);
+                        self.callees.len() - 1
+                    });
+                let outer = if root { keys } else { "NO_KEYS" };
+                match body {
+                    Body::Template(t) => self.line(&format!(
+                        "call(w, {outer}, {v}, data[{index}], (w, r, k) => t{t}(w, r, k, data));"
+                    )),
+                    Body::Inline(record) => {
+                        self.block(
+                            &format!("call(w, {outer}, {v}, data[{index}], (w, r, k) => {{"),
+                            |g| g.record(record, "r", 0, "k", true),
+                        );
+                        // `block` closed the arrow function's body; close the call.
+                        self.out.truncate(self.out.trim_end().len());
+                        self.out.push_str(");\n");
+                    }
+                }
+            }
+            // The callee places the slot's record, built by the caller.
+            Slot::Placed { record, .. } => self.record(record, v, 0, "NO_KEYS", false),
+            Slot::RootWrap => {} // handled by `record`
+        }
+    }
+
+    /// One return is just its record; several are `[index, record]`, read as `If`s in order.
+    fn returns(&mut self, returns: &[(crate::template::Range, Vec<Slot>)], v: &str, keys: &str) {
+        if let [(_, record)] = returns {
+            return self.record(record, v, 0, keys, true);
+        }
+        let (i, r) = (self.var("ret"), self.var("rec"));
+        self.line(&format!("const [{i}, {r}] = {v};"));
+        let last = returns.len() - 1;
+        for (n, (_, record)) in returns.iter().enumerate() {
+            let open = match n {
+                0 => format!("if ({i} === 0) {{"),
+                n if n == last => "else {".to_owned(),
+                n => format!("else if ({i} === {n}) {{"),
+            };
+            self.block(&open, |g| {
+                // Conditions for the returns before this one were false.
+                for _ in 0..n {
+                    g.line("w.condition(false);");
+                }
+                if n < last {
+                    g.line("w.condition(true);");
+                }
+                g.record(record, &r, 0, keys, true);
+            });
+        }
+    }
+}

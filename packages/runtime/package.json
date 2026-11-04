@@ -1,0 +1,23 @@
+{
+  "name": "@tsx2rs/runtime",
+  "version": "0.0.0",
+  "private": true,
+  "description": "tsx2rs runtime: encoding records as the engine's input (the HTTP server comes later)",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lostmartian/tsx2rs.git",
+    "directory": "packages/runtime"
+  },
+  "type": "module",
+  "exports": {
+    "./encode": "./src/encode.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "react": "catalog:",
+    "@types/react": "catalog:"
+  }
+}

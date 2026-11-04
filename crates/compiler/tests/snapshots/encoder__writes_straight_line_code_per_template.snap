@@ -1,0 +1,90 @@
+---
+source: crates/compiler/tests/encoder.rs
+expression: encoder.source
+---
+// tsx2rs encoder (generated): writes the records as the engine's input (ADR-0016).
+import { ENTRY_KEYS, NO_KEYS, Input, attrs, call, node, primitive, rootKey, style, value } from "@tsx2rs/runtime/encode";
+
+export function encode(record, data) {
+  const w = new Input();
+  t0(w, record, ENTRY_KEYS, data);
+  return w.finish();
+}
+
+function t0(w, r, k, data) {
+  const [ret1, rec2] = r[0];
+  if (ret1 === 0) {
+    w.condition(true);
+  }
+  else {
+    w.condition(false);
+    const wrap3 = k.implicit && rec2[0][0] !== null;
+    w.condition(wrap3);
+    const el4 = rec2[0];
+    primitive(w, rootKey(k, el4[0]));
+    primitive(w, el4[1]);
+    style(w, el4[2]);
+    const branch5 = el4[3];
+    w.condition(branch5[0]);
+    if (branch5[0]) {
+    }
+    else {
+    }
+    const items6 = el4[4];
+    w.u32(items6.length);
+    for (const item7 of items6) {
+      const el8 = item7[0];
+      primitive(w, el8[0]);
+      node(w, el8[1]);
+    }
+    const items9 = el4[5];
+    w.u32(items9.length);
+    for (const item10 of items9) {
+      w.condition(true);
+    }
+    const el11 = el4[6];
+    primitive(w, el11[0]);
+    attrs(w, el11[1]);
+    call(w, NO_KEYS, el4[7], data[0], (w, r, k) => {
+      const wrap12 = k.implicit && r[0][0] !== null;
+      w.condition(wrap12);
+      const el13 = r[0];
+      primitive(w, rootKey(k, el13[0]));
+      node(w, el13[1][0]);
+      node(w, el13[2]);
+      w.condition(wrap12);
+    });
+    call(w, NO_KEYS, el4[8], data[1], (w, r, k) => {
+      const wrap14 = k.implicit && r[0][0] !== null;
+      w.condition(wrap14);
+      const el15 = r[0];
+      primitive(w, rootKey(k, el15[0]));
+      const branch16 = el15[1];
+      w.condition(branch16[0]);
+      if (branch16[0]) {
+        call(w, NO_KEYS, branch16[1][0], data[1], (w, r, k) => t1(w, r, k, data));
+      }
+      else {
+        node(w, branch16[1][0]);
+      }
+      w.condition(wrap14);
+    });
+    w.condition(wrap3);
+  }
+}
+
+function t1(w, r, k, data) {
+  const wrap17 = k.implicit && r[0][0] !== null;
+  w.condition(wrap17);
+  const el18 = r[0];
+  primitive(w, rootKey(k, el18[0]));
+  const branch19 = el18[1];
+  w.condition(branch19[0]);
+  if (branch19[0]) {
+    call(w, NO_KEYS, branch19[1][0], data[1], (w, r, k) => t1(w, r, k, data));
+  }
+  else {
+    node(w, branch19[1][0]);
+  }
+  w.condition(wrap17);
+}
