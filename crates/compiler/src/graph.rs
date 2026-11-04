@@ -50,6 +50,9 @@ pub struct Module {
     pub exports: Exports,
     /// The component elements in its JSX, in source order (only for parsed server modules).
     pub component_uses: Vec<ComponentUse>,
+    /// The server components it defines, with their templates (ADR-0012); empty for client and
+    /// server-action modules.
+    pub components: Vec<crate::template::Component>,
 }
 
 /// A module's exports: defined in it, or re-exported from another module.
@@ -250,6 +253,7 @@ impl Builder {
             imports: Vec::new(),
             exports: Exports::default(),
             component_uses: Vec::new(),
+            components: Vec::new(),
         });
         self.paths.push(path.to_path_buf());
         self.by_path.insert(path.to_path_buf(), id);
@@ -324,6 +328,11 @@ impl Builder {
 
         self.modules[id.0].exports = exports(&module_record);
         self.modules[id.0].component_uses = crate::component::collect(&program);
+        let (components, problems) = crate::template::extract(&program);
+        self.modules[id.0].components = components;
+        for problem in problems {
+            self.diagnostic(Code::UnsupportedJsx, problem.message, &file, problem.span);
+        }
         let statements = statements(&module_record);
 
         let dir = path

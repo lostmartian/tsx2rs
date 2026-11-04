@@ -1,0 +1,18 @@
+---
+source: crates/compiler/tests/template.rs
+expression: "templates(r#\"\nexport default function Page({ items, names }) {\n  return (\n    <ul>\n      {items.map((item) => <li key={item.id}>{item.name}</li>)}\n      {items.filter((i) => i.ok).map(function (item) {\n        if (!item.name) return null;\n        return <li key={item.id}>{item.name}</li>;\n      })}\n      {names.map(String)}\n    </ul>\n  );\n}\n\"#)"
+---
+component Page default
+  return 0:
+    <ul>
+      map {items}
+        return 0:
+          <li key={item.id}>
+            hole {item.name}
+      map {items.filter((i) => i.ok)}
+        return 0:
+          null
+        return 1:
+          <li key={item.id}>
+            hole {item.name}
+      hole {names.map(String)}

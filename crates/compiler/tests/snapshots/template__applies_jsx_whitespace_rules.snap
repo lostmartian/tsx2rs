@@ -1,0 +1,10 @@
+---
+source: crates/compiler/tests/template.rs
+expression: "templates(\"export default () => (\\n  <div>\\n    first line\\n    second line\\n    <b> spaced </b>\\n    {/* comment */}\\n  </div>\\n);\\n\")"
+---
+component (anonymous) default
+  return 0:
+    <div>
+      text "first line second line"
+      <b>
+        text " spaced "

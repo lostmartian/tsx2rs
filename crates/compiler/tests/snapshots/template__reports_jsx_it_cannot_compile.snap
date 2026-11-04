@@ -1,0 +1,9 @@
+---
+source: crates/compiler/tests/template.rs
+expression: "templates(r#\"\nexport default function Page({ items }) {\n  return <div>{...items}</div>;\n}\n\"#)"
+---
+! TSX2RS_E0005 can't compile spread children (`{...children}`)
+component Page default
+  return 0:
+    <div>
+      hole {{...items}}

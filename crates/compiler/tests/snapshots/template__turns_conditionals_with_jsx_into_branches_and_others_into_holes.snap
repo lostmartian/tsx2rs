@@ -1,0 +1,32 @@
+---
+source: crates/compiler/tests/template.rs
+expression: "templates(r#\"\nexport default function Page({ a, b, c, d }) {\n  return (\n    <div>\n      {a ? <b>yes</b> : <i>no</i>}\n      {a ? <b>yes</b> : null}\n      {b && <span>shown</span>}\n      {c || <span>fallback</span>}\n      {d ?? <span>default</span>}\n      {a ? \"x\" : \"y\"}\n      {a && b}\n    </div>\n  );\n}\n\"#)"
+---
+component Page default
+  return 0:
+    <div>
+      ?: {a}
+        <b>
+          text "yes"
+      else
+        <i>
+          text "no"
+      ?: {a}
+        <b>
+          text "yes"
+      else
+        null
+      && {b}
+        <span>
+          text "shown"
+      || {c}
+        <span>
+          text "fallback"
+      ?? {d}
+        <span>
+          text "default"
+      ?: {a}
+        text "x"
+      else
+        text "y"
+      hole {a && b}

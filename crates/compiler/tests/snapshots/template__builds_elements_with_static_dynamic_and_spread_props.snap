@@ -1,0 +1,15 @@
+---
+source: crates/compiler/tests/template.rs
+expression: "templates(r#\"\nexport default function Page({ id, rest, title }) {\n  return (\n    <section key=\"s\" className=\"card\" id={id} hidden data-n={2} {...rest} title={`${title}!`}>\n      <h1 key={id}>Hello, world</h1>\n      {\"literal\"}{42}{-1}{null}{true}\n      {title}\n    </section>\n  );\n}\n\"#)"
+---
+component Page default
+  return 0:
+    <section key="s" className="card" id={id} hidden=true data-n=2 {...rest} title={`${title}!`}>
+      <h1 key={id}>
+        text "Hello, world"
+      text "literal"
+      number 42
+      number -1
+      null
+      true
+      hole {title}

@@ -1,0 +1,16 @@
+---
+source: crates/compiler/tests/template.rs
+expression: "templates(r#\"\nexport default function Page({ src, json, label }) {\n  return (\n    <div>\n      <img src={src} alt=\"\" />\n      <title>Static title</title>\n      <script type=\"application/ld+json\" dangerouslySetInnerHTML={{ __html: json }} />\n      <input value={label} />\n      <svg viewBox=\"0 0 1 1\"><path d=\"M0\" /></svg>\n      <svg><title>{label}</title></svg>\n      <div dangerouslySetInnerHTML={{ __html: json }} />\n      <span children={label} />\n    </div>\n  );\n}\n\"#)"
+---
+component Page default
+  return 0:
+    <div>
+      element value (Hoistable) {<img src={src} alt="" />}
+      element value (Hoistable) {<title>Static title</title>}
+      element value (Hoistable) {<script type="application/ld+json" dangerouslySetInnerHTML={{ __html: json }} />}
+      element value (Special) {<input value={label} />}
+      <svg viewBox="0 0 1 1">
+        <path d="M0">
+      element value (Context) {<svg><title>{label}</title></svg>}
+      element value (Content) {<div dangerouslySetInnerHTML={{ __html: json }} />}
+      element value (Content) {<span children={label} />}

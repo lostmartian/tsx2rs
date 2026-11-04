@@ -1,0 +1,12 @@
+---
+source: crates/compiler/tests/template.rs
+expression: "templates(r#\"\nimport { notFound } from \"next/navigation\";\nexport default async function Page({ product, items }) {\n  if (!product) return notFound();\n  const render = () => <p>inner</p>;\n  if (product.hidden) {\n    return null;\n  }\n  items.forEach((item) => { return <b>also inner</b>; });\n  return <main>{product.title}</main>;\n}\n\"#)"
+---
+component Page default async
+  return 0:
+    hole {notFound()}
+  return 1:
+    null
+  return 2:
+    <main>
+      hole {product.title}

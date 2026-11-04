@@ -174,7 +174,7 @@ fn literal(expression: &JSXExpression<'_>) -> Option<String> {
 }
 
 /// A JSON number as `JSON.stringify` writes it, or `None` for values JSON can't hold.
-fn json_number(n: f64) -> Option<String> {
+pub(crate) fn json_number(n: f64) -> Option<String> {
     if !n.is_finite() {
         return None;
     }
@@ -185,7 +185,7 @@ fn json_number(n: f64) -> Option<String> {
 }
 
 /// A JSON string literal (as `JSON.stringify` writes it).
-fn json_string(s: &str) -> String {
+pub(crate) fn json_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {

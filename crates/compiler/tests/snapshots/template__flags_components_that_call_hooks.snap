@@ -1,0 +1,15 @@
+---
+source: crates/compiler/tests/template.rs
+expression: "templates(r#\"\nimport { use, useId } from \"react\";\nexport function WithUse({ promise }) { const value = use(promise); return <p>{value}</p>; }\nexport function WithId() { const id = useId(); return <p id={id} />; }\nexport function NotAHook({ user }) { const x = user(); return <p>{x}</p>; }\n\"#)"
+---
+component WithUse hooks
+  return 0:
+    <p>
+      hole {value}
+component WithId hooks
+  return 0:
+    <p id={id}>
+component NotAHook
+  return 0:
+    <p>
+      hole {x}

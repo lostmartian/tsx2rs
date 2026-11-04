@@ -41,7 +41,7 @@ Source → templates + data functions → programs, in phases with one module ea
 1. **Parse** (oxc)
 2. **Module graph** from a route entry
 3. **Component usage:** server, client and React built-in components (`"use client"`, re-exports)
-4. **Templates:** JSX in template positions becomes a template; other JSX stays real JSX and becomes an element value at runtime *(planned)*
+4. **Templates** (`template`): each server component's JSX in template positions becomes a template tree of static parts and holes (props, children, conditionals, lists, component calls, element values; [ADR-0012](docs/adr/0012-compiling-templates.md)); other JSX stays real JSX and becomes an element value at runtime
 5. **Data functions:** span-based rewriting of the component's own code, with each returned JSX replaced by its hole values *(planned)*
 6. **Linking:** child components, slots, and `Call` or template nodes for recursion and runtime components *(planned; the engine side exists)*
 7. **Lowering** to programs, and the **encoder** from the same traversal *(planned)*
