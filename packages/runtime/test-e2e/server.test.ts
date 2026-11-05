@@ -164,7 +164,7 @@ describe("the tsx2rs server, for a compiled route", () => {
     expect(ours).toEqual(next);
     expect((await state())["/p/[n]"]).toMatchObject({
       state: "refused",
-      reason: "tsx2rs can't render it: a component element, rendered by React for now",
+      reason: "tsx2rs can't render it: a client component element, not learned yet",
     });
   });
 });

@@ -243,6 +243,10 @@ fn product_page_links() {
                 Slot::Placed { record, .. } | Slot::Keyed { record, .. } => {
                     calls(graph, record, out);
                 }
+                Slot::Island { source, record, .. } => {
+                    out.push(format!("island {source}"));
+                    calls(graph, record, out);
+                }
                 Slot::Branch {
                     then, otherwise, ..
                 } => {

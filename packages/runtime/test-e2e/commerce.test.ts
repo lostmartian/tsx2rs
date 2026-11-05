@@ -131,11 +131,11 @@ describe("Commerce", () => {
         "differs in ways the params and fragments don't explain",
       ) as string,
     });
-    // Client components and <Suspense> are handed to React: the hand-off is the next step.
+    // Client components are islands, learned from Next.js's responses next (ADR-0020).
     for (const route of ["/", "/product/[handle]", "/product-streaming/[handle]"]) {
       expect(states[route]).toMatchObject({
         state: "refused",
-        reason: "tsx2rs can't render it: a component element, rendered by React for now",
+        reason: expect.stringMatching(/^tsx2rs can't render it: a /) as string,
       });
     }
   });

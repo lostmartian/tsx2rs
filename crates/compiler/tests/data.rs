@@ -249,3 +249,35 @@ export const order_seen = () => order;
         )
     );
 }
+
+#[test]
+fn builds_an_island_as_its_key_props_and_childrens_record() {
+    // `jsx(Link, { href, prefetch, children }, key)`: the props and children first, then the key.
+    let source = r#"import Link from "next/link";
+let order = [];
+const log = (name, v) => { order.push(name); return v; };
+export default function Page({ h, k }) {
+  return (
+    <nav>
+      <Link href={log("href", h)} key={log("key", k)} prefetch={false}>go <b>{log("child", h)}</b></Link>
+      <Link href="/" />
+    </nav>
+  );
+}
+export const order_seen = () => order;
+"#;
+    let (functions, module) = generated(source);
+    insta::assert_snapshot!(functions);
+    // Node.js can't load `next/link` here, and the data function doesn't use it.
+    let module = module.replace(r#"import Link from "next/link";"#, "");
+    assert_eq!(
+        run(
+            &module,
+            "[m.__tsx2rs_data_Page({ h: '/p', k: 3 }), m.order_seen()]"
+        ),
+        concat!(
+            r#"[[[null,["3",{"href":"/p","prefetch":false},"/p"],[null,{"href":"/"}]]],"#,
+            r#"["href","child","key"]]"#
+        )
+    );
+}

@@ -3,10 +3,10 @@ source: crates/compiler/tests/commerce.rs
 expression: out
 ---
 app/product/[handle]/page.tsx ProductPage: 14 ops; links []
-app/product/[handle]/page.tsx RelatedProducts: 18 ops; links []
+app/product/[handle]/page.tsx RelatedProducts: 74 ops; links [island next/link, GridTileImage, Label, Price]
 components/grid/tile.tsx GridTileImage: 45 ops; links [Label, Price]
-components/layout/footer.tsx Footer: 20 ops; links []
-components/product/product-description.tsx ProductDescription: 28 ops; links [Price, Prose]
+components/layout/footer.tsx Footer: 51 ops; links [island next/link, LogoSquare, LogoIcon]
+components/product/product-description.tsx ProductDescription: 40 ops; links [Price, island components/product/variant-selector.tsx, Prose, island components/cart/add-to-cart.tsx]
 components/label.tsx Label: 27 ops; links [Price]
 components/logo-square.tsx LogoSquare: 19 ops; links [LogoIcon]
 components/price.tsx Price: 15 ops; links []

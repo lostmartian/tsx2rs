@@ -52,7 +52,9 @@ type Slot =
       t?: number;
       slots: Record<string, Slot[]>;
     }
-  | { pl: Slot[] };
+  | { pl: Slot[] }
+  /** A client component island (ADR-0020): learned from Next.js, which this oracle isn't. */
+  | { i: 1 };
 
 interface Plan {
   /** The entry's data function: its module, and its name. */
@@ -396,6 +398,8 @@ class Resolver {
     } else if ("pl" in slot) {
       // The callee places the slot's record, built by the caller.
       this.record(slot.pl, v as unknown[], { path: null, implicit: false });
+    } else if ("i" in slot) {
+      throw new Unsupported("a client component island (checked against Next.js instead)");
     }
   }
 }

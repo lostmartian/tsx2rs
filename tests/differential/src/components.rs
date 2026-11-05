@@ -278,6 +278,7 @@ impl Plan<'_> {
                 self.record(out, record, false);
                 out.push('}');
             }
+            Slot::Island { .. } => out.push_str(r#"{"i":1}"#),
         }
     }
 }

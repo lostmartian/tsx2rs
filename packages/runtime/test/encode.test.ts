@@ -7,6 +7,8 @@ import {
   NotNative,
   attrs,
   call,
+  html,
+  island,
   node,
   primitive,
   reference,
@@ -288,6 +290,33 @@ describe("node", () => {
         }),
       ).toThrow(NotNative);
     }
+  });
+});
+
+describe("islands", () => {
+  it("asks the resolver for each island, and refuses without one", () => {
+    const seen: [number, Record<string, unknown>][] = [];
+    const resolved = island(
+      (index, props) => {
+        seen.push([index, props]);
+        return { ref: "$L1", before: "<a>", after: "</a>" };
+      },
+      2,
+      { href: "/" },
+    );
+    expect(resolved).toEqual({ ref: "$L1", before: "<a>", after: "</a>" });
+    expect(seen).toEqual([[2, { href: "/" }]]);
+    expect(() => island(undefined, 0, {})).toThrow(
+      new NotNative("a client component element, not learned yet", {}),
+    );
+  });
+
+  it("writes an island's HTML with no text edges: the learned HTML has React's separators", () => {
+    expect(
+      bytes((w) => {
+        html(w, "<a>");
+      }),
+    ).toEqual([...str("<a>"), 0]);
   });
 });
 
