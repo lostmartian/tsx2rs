@@ -10,6 +10,7 @@ use std::path::Path;
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 use tsx2rs_compiler::build::{self, Outcome};
+use tsx2rs_engine::{Output, render};
 
 /// The tsx2rs version of this native binary.
 #[napi(catch_unwind)]
@@ -103,6 +104,69 @@ pub fn compile_app(root: String, pages: Vec<String>) -> App {
     App {
         routes,
         modules: app.modules.into_iter().collect(),
+    }
+}
+
+/// A template program, decoded and validated once (`tsx2rs_ir::Program`), to render per request.
+#[napi(js_name = "Program")]
+#[derive(Debug)]
+pub struct TemplateProgram {
+    program: tsx2rs_ir::Program,
+}
+
+/// What a render wrote (`tsx2rs_engine::Output`).
+#[napi(object)]
+#[derive(Debug)]
+pub struct Rendered {
+    /// The HTML.
+    pub html: String,
+    /// The Flight model, not yet split into rows or escaped for a `<script>`.
+    pub flight: String,
+    /// What React DOM hoists into `<head>`, in its order (empty if nothing).
+    pub head: String,
+    /// The Flight resource hint rows (`:HL`, `:Hm`), which go before the Flight rows.
+    pub hints: String,
+}
+
+#[napi]
+impl TemplateProgram {
+    /// Decodes a program in its binary format, as the manifest stores it.
+    ///
+    /// # Errors
+    ///
+    /// If the bytes aren't a valid program of the format version this binary runs.
+    #[napi(constructor, catch_unwind)]
+    #[allow(clippy::needless_pass_by_value)] // napi-rs passes JavaScript arguments by value
+    pub fn new(bytes: Buffer) -> napi::Result<Self> {
+        let program = tsx2rs_ir::Program::decode(&bytes)
+            .map_err(|e| napi::Error::from_reason(format!("invalid program: {e}")))?;
+        Ok(Self { program })
+    }
+
+    /// Renders the program with `input`, the encoder's bytes.
+    ///
+    /// # Errors
+    ///
+    /// If the input doesn't fit the program, or holds a value React rejects or the engine
+    /// doesn't render (the request then falls back to Next.js).
+    #[napi(catch_unwind)]
+    #[allow(clippy::needless_pass_by_value)] // napi-rs passes JavaScript arguments by value
+    pub fn render(&self, input: Buffer) -> napi::Result<Rendered> {
+        let mut output = Output::new();
+        render(&self.program, &input, &mut output)
+            .map_err(|e| napi::Error::from_reason(format!("render failed: {e}")))?;
+        let mut head = Vec::new();
+        output.head.write(&mut head);
+        let text = |bytes: Vec<u8>| {
+            String::from_utf8(bytes)
+                .map_err(|e| napi::Error::from_reason(format!("not UTF-8: {e}")))
+        };
+        Ok(Rendered {
+            html: text(output.html)?,
+            flight: text(output.flight)?,
+            head: text(head)?,
+            hints: text(output.hints.rows().to_vec())?,
+        })
     }
 }
 
