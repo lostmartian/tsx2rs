@@ -12,13 +12,21 @@
   "type": "module",
   "exports": {
     "./encode": "./src/encode.ts",
-    "./capture": "./src/capture.ts"
+    "./capture": "./src/capture.ts",
+    "./server": "./src/server.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "react": "catalog:",
-    "@types/react": "catalog:"
+    "@types/react": "catalog:",
+    "next": "catalog:",
+    "react": "catalog:"
+  },
+  "dependencies": {
+    "@next/routing": "16.4.3"
+  },
+  "peerDependencies": {
+    "next": "16.4.3"
   }
 }

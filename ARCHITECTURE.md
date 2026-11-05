@@ -77,14 +77,7 @@ The only bridge to Node.js (napi-rs), published as `@tsx2rs/native`. Thin: conve
 
 - **Capture** (`capture`, [ADR-0018](docs/adr/0018-capturing-the-wrapper.md)): Next.js's wrapper around a compiled page (document, layouts, router state), learned from a response Next.js served, with the page's fragments, the URL and the params as slots, confirmed by a response with other params, and filled per request; a response that differs in ways the slots don't explain refuses the route
 
-The HTTP server is *planned* (step 8):
-- Routing (`@next/routing`, the same resolver Next.js uses)
-- Fallback to Next.js handlers
-- Running each route's setup code
-- The island cache with context-aware keys
-- Streaming of `<Suspense>` boundaries
-- Image optimization
-- A cluster launcher (one process per vCPU)
+- **The server** (`server`, [ADR-0019](docs/adr/0019-runtime-server.md)): decides with `@next/routing` and the build's routing rules (manifest version 2) whether a request is a compiled route's; every other request goes to Next.js's own request handler (its custom-server API), so fallback is `next start` itself. Serving compiled routes, the island cache, streaming and the cluster launcher are *planned* (step 8).
 
 ### `packages/native`
 `@tsx2rs/native`: the napi binary (`crates/napi`) as an npm package, built from source for now (`pnpm build:native`); prebuilt per platform after milestone 1.

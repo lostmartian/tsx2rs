@@ -1,6 +1,6 @@
 # @tsx2rs/runtime
 
-What a compiled route runs at request time. Today that's encoding and capturing Next.js's wrapper; the HTTP server comes with milestone 1's step 8.
+What a compiled route runs at request time. Today that's encoding, capturing Next.js's wrapper, and the server; serving compiled routes through it is next (milestone 1, step 8).
 
 - **`@tsx2rs/runtime/encode`** ([ADR-0016](../../docs/adr/0016-generated-encoder.md)): the engine's input writer (`Input`), and the encoders the compiler's generated encoders call:
   - one per hole kind: `node`, `primitive`, `style`, `attrs`, `value`
@@ -15,5 +15,7 @@ What a compiled route runs at request time. Today that's encoding and capturing 
   - `fill` writes the document for a request.
 
   It is tested byte for byte on real Next.js 16.4.3 documents (`test/next/`).
+
+- **`@tsx2rs/runtime/server`** ([ADR-0019](../../docs/adr/0019-runtime-server.md)): `start({ dir, port })` serves an app built with `@tsx2rs/adapter`. A request tsx2rs doesn't serve goes to Next.js's own request handler, so it is `next start`'s answer, byte for byte. `pnpm test:runtime` checks that against `next start` on a real build.
 
 Tested with `pnpm test` (unit tests, byte for byte) and end to end by the component fixtures in [`tests/differential`](../../tests/differential/README.md), which run every generated encoder against a reference and the engine's output against React.

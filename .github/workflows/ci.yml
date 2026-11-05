@@ -96,7 +96,7 @@ jobs:
         run: pnpm test:identity
 
   adapter:
-    name: Adapter (next build)
+    name: Adapter and runtime (next build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -110,6 +110,8 @@ jobs:
       - run: pnpm build:native
       - name: Build an app with the adapter (Turbopack and webpack) and check what it produced
         run: pnpm test:adapter
+      - name: Serve the app with the tsx2rs server and compare it with next start
+        run: pnpm test:runtime
 
   differential:
     name: Differential (engine vs React)
