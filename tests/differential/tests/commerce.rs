@@ -68,9 +68,9 @@ fn commerce_components_round_trip_its_data() {
 }
 
 #[test]
-fn hands_client_components_to_react() {
-    // `next/image` is a client component: the encoder stops at its hole, where the runtime
-    // will hand it to React (step 8).
+fn hands_client_components_with_a_spread_to_react() {
+    // `<Image {...props} />`: a client component with a spread isn't an island yet (ADR-0020), so
+    // the encoder stops at its hole, where the runtime hands it to React.
     let graph = graph();
     let (module, index) = component(&graph, "components/grid/tile.tsx", "GridTileImage");
     let compiled = compile_component(&graph, &app(), module, index).unwrap();

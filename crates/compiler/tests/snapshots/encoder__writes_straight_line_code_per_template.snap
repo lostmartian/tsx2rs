@@ -3,15 +3,15 @@ source: crates/compiler/tests/encoder.rs
 expression: encoder.source
 ---
 // tsx2rs encoder (generated): writes the records as the engine's input (ADR-0016).
-import { ENTRY_KEYS, NO_KEYS, Input, attrs, call, node, primitive, rootKey, style, value } from "@tsx2rs/runtime/encode";
+import { ENTRY_KEYS, NO_KEYS, Input, attrs, call, html, island, node, primitive, reference, rootKey, style, value } from "@tsx2rs/runtime/encode";
 
-export function encode(record, data) {
+export function encode(record, data, islands) {
   const w = new Input();
-  t0(w, record, ENTRY_KEYS, data);
+  t0(w, record, ENTRY_KEYS, data, islands);
   return w.finish();
 }
 
-function t0(w, r, k, data) {
+function t0(w, r, k, data, islands) {
   const [ret1, rec2] = r[0];
   if (ret1 === 0) {
     w.condition(true);
@@ -62,29 +62,44 @@ function t0(w, r, k, data) {
       const branch16 = el15[1];
       w.condition(branch16[0]);
       if (branch16[0]) {
-        call(w, NO_KEYS, branch16[1][0], data[1], (w, r, k) => t1(w, r, k, data));
+        call(w, NO_KEYS, branch16[1][0], data[1], (w, r, k) => t1(w, r, k, data, islands));
       }
       else {
         node(w, branch16[1][0]);
       }
       w.condition(wrap14);
     });
+    const el17 = el4[9];
+    const island18 = island(islands, 0, el17[1]);
+    reference(w, island18.ref);
+    primitive(w, el17[0]);
+    value(w, el17[1]["href"]);
+    value(w, el17[1]["prefetch"]);
+    html(w, island18.before);
+    node(w, el17[2]);
+    html(w, island18.after);
+    const el19 = el4[10];
+    const island20 = island(islands, 0, el19[1]);
+    reference(w, island20.ref);
+    primitive(w, el19[0]);
+    value(w, el19[1]["href"]);
+    html(w, island20.before);
     w.condition(wrap3);
   }
 }
 
-function t1(w, r, k, data) {
-  const wrap17 = k.implicit && r[0][0] !== null;
-  w.condition(wrap17);
-  const el18 = r[0];
-  primitive(w, rootKey(k, el18[0]));
-  const branch19 = el18[1];
-  w.condition(branch19[0]);
-  if (branch19[0]) {
-    call(w, NO_KEYS, branch19[1][0], data[1], (w, r, k) => t1(w, r, k, data));
+function t1(w, r, k, data, islands) {
+  const wrap21 = k.implicit && r[0][0] !== null;
+  w.condition(wrap21);
+  const el22 = r[0];
+  primitive(w, rootKey(k, el22[0]));
+  const branch23 = el22[1];
+  w.condition(branch23[0]);
+  if (branch23[0]) {
+    call(w, NO_KEYS, branch23[1][0], data[1], (w, r, k) => t1(w, r, k, data, islands));
   }
   else {
-    node(w, branch19[1][0]);
+    node(w, branch23[1][0]);
   }
-  w.condition(wrap17);
+  w.condition(wrap21);
 }

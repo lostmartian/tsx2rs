@@ -11,14 +11,20 @@ use std::fmt::Write as _;
 
 use crate::graph::ModuleId;
 use crate::lower::{Body, Lowered, Slot, Test, ValueKind};
+use crate::template::Prop;
+use crate::usage::Export;
 
 /// A route's generated encoder.
 #[derive(Debug)]
 pub struct Encoder {
-    /// The JavaScript module: `export function encode(record, data)`, returning the input bytes.
+    /// The JavaScript module: `export function encode(record, data, islands)`, returning the
+    /// input bytes. `islands` resolves each island (ADR-0020); without it, a route with an
+    /// island throws `NotNative`.
     pub source: String,
     /// The data functions `data` must hold, in order: (module, component index).
     pub callees: Vec<(ModuleId, usize)>,
+    /// The client components `islands` is asked for, by index: (source, export).
+    pub islands: Vec<(String, Export)>,
 }
 
 /// The encoder for a lowered page: `record` is its data function's record.
@@ -27,31 +33,34 @@ pub fn generate(lowered: &Lowered) -> Encoder {
     let mut g = Generator {
         out: String::new(),
         callees: Vec::new(),
+        islands: Vec::new(),
         next: 0,
         depth: 1,
     };
     g.out.push_str(
         "// tsx2rs encoder (generated): writes the records as the engine's input (ADR-0016).\n\
-         import { ENTRY_KEYS, NO_KEYS, Input, attrs, call, node, primitive, rootKey, style, value } \
-         from \"@tsx2rs/runtime/encode\";\n\n\
-         export function encode(record, data) {\n  const w = new Input();\n  \
-         t0(w, record, ENTRY_KEYS, data);\n  return w.finish();\n}\n",
+         import { ENTRY_KEYS, NO_KEYS, Input, attrs, call, html, island, node, primitive, \
+         reference, rootKey, style, value } from \"@tsx2rs/runtime/encode\";\n\n\
+         export function encode(record, data, islands) {\n  const w = new Input();\n  \
+         t0(w, record, ENTRY_KEYS, data, islands);\n  return w.finish();\n}\n",
     );
     let templates = std::iter::once(&lowered.record).chain(&lowered.templates);
     for (i, record) in templates.enumerate() {
-        let _ = write!(g.out, "\nfunction t{i}(w, r, k, data) {{\n");
+        let _ = write!(g.out, "\nfunction t{i}(w, r, k, data, islands) {{\n");
         g.record(record, "r", 0, "k", true);
         g.out.push_str("}\n");
     }
     Encoder {
         source: g.out,
         callees: g.callees,
+        islands: g.islands,
     }
 }
 
 struct Generator {
     out: String,
     callees: Vec<(ModuleId, usize)>,
+    islands: Vec<(String, Export)>,
     /// For unique variable names.
     next: usize,
     /// Indentation.
@@ -187,7 +196,7 @@ impl Generator {
                 let outer = if root { keys } else { "NO_KEYS" };
                 match body {
                     Body::Template(t) => self.line(&format!(
-                        "call(w, {outer}, {v}, data[{index}], (w, r, k) => t{t}(w, r, k, data));"
+                        "call(w, {outer}, {v}, data[{index}], (w, r, k) => t{t}(w, r, k, data, islands));"
                     )),
                     Body::Inline(record) => {
                         self.block(
@@ -203,6 +212,51 @@ impl Generator {
             // The callee places the slot's record, built by the caller.
             Slot::Placed { record, .. } => self.record(record, v, 0, "NO_KEYS", false),
             Slot::RootWrap => {} // handled by `record`
+            Slot::Island {
+                source,
+                export,
+                props,
+                children,
+                record,
+                ..
+            } => self.island((source, export), props, *children, record, v),
+        }
+    }
+
+    /// An island (ADR-0020): resolved once, then its reference, key, props, HTML before, children
+    /// and HTML after, in program order.
+    fn island(
+        &mut self,
+        (source, export): (&str, &Export),
+        props: &[Prop],
+        children: bool,
+        record: &[Slot],
+        v: &str,
+    ) {
+        let component = (source.to_owned(), export.clone());
+        let index = self
+            .islands
+            .iter()
+            .position(|c| *c == component)
+            .unwrap_or_else(|| {
+                self.islands.push(component);
+                self.islands.len() - 1
+            });
+        let (el, i) = (self.var("el"), self.var("island"));
+        self.line(&format!("const {el} = {v};"));
+        self.line(&format!("const {i} = island(islands, {index}, {el}[1]);"));
+        self.line(&format!("reference(w, {i}.ref);"));
+        self.line(&format!("primitive(w, {el}[0]);"));
+        for prop in props {
+            if let Prop::Static { name, .. } | Prop::Dynamic { name, .. } = prop {
+                let name = crate::component::json_string(name);
+                self.line(&format!("value(w, {el}[1][{name}]);"));
+            }
+        }
+        self.line(&format!("html(w, {i}.before);"));
+        if children {
+            self.record(record, &el, 2, "NO_KEYS", false);
+            self.line(&format!("html(w, {i}.after);"));
         }
     }
 

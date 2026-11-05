@@ -15,7 +15,8 @@ use tsx2rs_compiler::lower;
 fn writes_straight_line_code_per_template() {
     let p = Project::new(&[(
         "app/page.tsx",
-        r#"function Tree({ n }) { return <ol>{n > 0 && <Tree n={n - 1} />}</ol>; }
+        r#"import Link from "next/link";
+function Tree({ n }) { return <ol>{n > 0 && <Tree n={n - 1} />}</ol>; }
 function Card({ title, children }) { return <article>{title}{children}</article>; }
 export default function Page({ a, xs, rest, s }) {
   if (!a) return null;
@@ -27,6 +28,8 @@ export default function Page({ a, xs, rest, s }) {
       <p {...rest} onClick={undefined}>spread</p>
       <Card title={<h2>{a}</h2>}>{a}</Card>
       <Tree n={2} />
+      <Link href={a} prefetch={false}>{a}<i>x</i></Link>
+      <Link href="/" key={a} />
     </main>
   );
 }"#,
@@ -46,5 +49,7 @@ export default function Page({ a, xs, rest, s }) {
         .map(|(m, i)| graph.modules[m.0].components[*i].name.clone().unwrap())
         .collect();
     assert_eq!(callees, ["Card", "Tree"]);
+    let islands: Vec<_> = encoder.islands.iter().map(|(s, _)| s.as_str()).collect();
+    assert_eq!(islands, ["next/link"]);
     insta::assert_snapshot!(encoder.source);
 }

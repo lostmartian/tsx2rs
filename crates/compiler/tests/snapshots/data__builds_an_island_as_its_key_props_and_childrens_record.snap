@@ -1,0 +1,15 @@
+---
+source: crates/compiler/tests/data.rs
+expression: functions
+---
+
+// tsx2rs data functions (generated): each returns its template's record.
+const __tsx2rs_key = (key) => (key === undefined ? null : "" + key);
+const __tsx2rs_keyed = (record, key) => [__tsx2rs_key(key), ...record];
+const __tsx2rs_el = (config, record, key) => {
+  const { key: own, ...props } = config;
+  return [own === undefined ? __tsx2rs_key(key) : "" + own, props, ...record];
+};
+export const __tsx2rs_data_Page = function Page({ h, k }) {
+  return [[null, __tsx2rs_el({"href": (log("href", h)), "prefetch": false}, [(log("child", h))], (log("key", k))), __tsx2rs_el({"href": "/"}, [], undefined)]];
+};

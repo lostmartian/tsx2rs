@@ -100,9 +100,9 @@ describe.each([
     ]);
     // The page without client components encodes natively.
     expect(results.find((r) => r.page === "app/q/[n]/page.tsx")?.input?.length).toBeGreaterThan(0);
-    // `<Counter />` is a client component: the encoder stops there, for React (step 8).
+    // `<Counter />` is a client component: an island, which needs a resolver (ADR-0020).
     expect(results.find((r) => r.page === "app/p/[n]/page.tsx")?.notNative).toBe(
-      "a component element, rendered by React for now",
+      "a client component element, not learned yet",
     );
   });
 });

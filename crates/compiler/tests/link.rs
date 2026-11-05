@@ -78,6 +78,10 @@ fn links(record: &[Slot]) -> Vec<String> {
                 out.extend(links(record));
             }
             Slot::Keyed { record, .. } => out.extend(links(record)),
+            Slot::Island { source, record, .. } => {
+                out.push(format!("island {source}"));
+                out.extend(links(record));
+            }
             Slot::Value {
                 kind: ValueKind::Child,
                 ..
@@ -280,10 +284,10 @@ export function Counter() { return null; }"#,
     assert_eq!(
         links(&page.record),
         [
-            "child", // a component that calls a hook: React renders it
+            "child",                  // a component that calls a hook: React renders it
             "child", // async: its own Flight row (`$L1`), which comes with streaming
             "child", // a parameter shadows the module's `Shadowed`
-            "child", // a client component
+            "island app/counter.tsx", // a client component (ADR-0020)
             "child", // `children` used as a value, not only placed
             "child", // a JSX prop the callee doesn't place
             "call",  // Tree, inlined
@@ -447,4 +451,113 @@ export default function Page() { return <main><Box n={1}><b>s</b></Box></main>; 
     let page = page(&g);
     assert_eq!(links(&page.record), ["call", "slot", "call 1", "child"]);
     assert_eq!(links(&page.templates[0]), ["child", "call 1", "child"]);
+}
+
+#[test]
+fn renders_client_components_as_islands_around_native_children() {
+    let g = graph(&[
+        (
+            "app/page.tsx",
+            r#"import Link from "next/link";
+import { Price } from "./price";
+export default function Page({ h, x }) {
+  return <nav><Link href={h} prefetch={false} key="k">go <Price amount={x} /></Link><Link href="/" />!</nav>;
+}"#,
+        ),
+        (
+            "app/price.tsx",
+            "export function Price({ amount }) { return <b>{amount}</b>; }",
+        ),
+    ]);
+    let page = page(&g);
+    let Slot::Keyed { record: nav, .. } = &page.record[1] else {
+        panic!("{:?}", page.record);
+    };
+    assert_eq!(
+        links(nav),
+        ["island next/link", "call", "child", "island next/link"]
+    );
+    let Slot::Island {
+        source,
+        key,
+        children: true,
+        ..
+    } = &nav[0]
+    else {
+        panic!("{nav:?}");
+    };
+    assert_eq!(source, "next/link");
+    assert!(matches!(key, Some(tsx2rs_compiler::template::Key::Static(k)) if k == "k"));
+    let (html, flight) = rendered(&page, |w| {
+        root_open(w, false, None);
+        // The first island: reference, key, props, HTML before, children, HTML after.
+        w.tag(tag::REFERENCE).string("$L1");
+        w.tag(tag::STRING).string("k");
+        w.tag(tag::STRING).string("/p");
+        w.tag(tag::FALSE);
+        w.island(r#"<a href="/p">"#, 0);
+        root_open(w, false, None); // Price's root
+        w.tag(tag::STRING).string("9");
+        root_close(w, false);
+        w.island("</a>", 0);
+        // The second: no children, so one `Island`.
+        w.tag(tag::REFERENCE).string("$L1");
+        w.tag(tag::NULL);
+        w.tag(tag::STRING).string("/");
+        w.island(r#"<a href="/"></a>"#, 0);
+        root_close(w, false);
+    });
+    assert_eq!(
+        html,
+        r#"<nav><a href="/p">go <b>9</b></a><a href="/"></a>!</nav>"#
+    );
+    assert_eq!(
+        flight,
+        concat!(
+            r#"0:["$","nav",null,{"children":[["$","$L1","k",{"href":"/p","prefetch":false,"#,
+            r#""children":["go ",["$","b",null,{"children":"9"}]]}],"#,
+            r#"["$","$L1",null,{"href":"/"}],"!"]}]"#,
+            "\n"
+        )
+    );
+}
+
+#[test]
+fn leaves_client_components_it_cannot_make_islands_to_react() {
+    let g = graph(&[(
+        "app/page.tsx",
+        r#"import Link from "next/link";
+import Image from "next/image";
+export function Root({ h }) { return <Link href={h} />; }
+export default function Page({ h, p }) {
+  return (
+    <div>
+      <Link {...p} />
+      <Link href={h} icon={<i />} />
+      <Link href={h} children="c" />
+      <Link href={h} href="/" />
+      <Image src={h} />
+      <Root h={h} />
+    </div>
+  );
+}"#,
+    )]);
+    let page = page(&g);
+    let Slot::Keyed { record: div, .. } = &page.record[1] else {
+        panic!("{:?}", page.record);
+    };
+    // Spread, JSX prop, `children` prop, a prop twice: React; `Image`: an island; a client
+    // component at a component's root: React.
+    assert_eq!(
+        links(div),
+        [
+            "child",
+            "child",
+            "child",
+            "child",
+            "island next/image",
+            "call",
+            "child"
+        ]
+    );
 }

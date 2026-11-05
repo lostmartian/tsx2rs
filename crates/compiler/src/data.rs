@@ -17,6 +17,8 @@
 //! - a linked child component is a pending call, `[config, key]` as passed to React's `jsx`: the
 //!   runtime calls the child's own data function with its props after this record is complete,
 //!   as React runs children after their parent (ADR-0013);
+//! - a client component element (an island, ADR-0020) is `[key, props, ...record]`, as for a
+//!   spread element: its props without `children`, then its children's record;
 //! - for a root element, the runtime puts the key path in front of that key and decides the
 //!   wrap (ADR-0008), which isn't in the record.
 
@@ -216,6 +218,9 @@ impl Writer<'_> {
                 ..
             } => self.keyed(key.as_ref(), *key_at, props, record, tested),
             Slot::RootWrap => return None, // the runtime's (ADR-0008)
+            Slot::Island {
+                key, props, record, ..
+            } => self.island(key.as_ref(), props, record, tested),
         })
     }
 
@@ -288,6 +293,31 @@ impl Writer<'_> {
                     .join(", ")
             ),
         }
+    }
+
+    /// An island's `[key, props, ...record]`, as `jsx(type, config, key)` evaluates it: the props
+    /// and children, then the key (no spread, so the key is the argument).
+    fn island(
+        &mut self,
+        key: Option<&Key>,
+        props: &[Prop],
+        record: &[Slot],
+        tested: Option<(Range, &str)>,
+    ) -> String {
+        let values: Vec<String> = record
+            .iter()
+            .filter_map(|slot| self.slot(slot, tested))
+            .collect();
+        let key = match key {
+            Some(Key::Static(key)) => json_key(key),
+            Some(Key::Dynamic(span)) => format!("({})", self.text(*span)),
+            None => "undefined".to_owned(),
+        };
+        format!(
+            "__tsx2rs_el({}, [{}], {key})",
+            self.props(props),
+            values.join(", ")
+        )
     }
 
     /// A props object as JSX builds it: in order, spreads included.

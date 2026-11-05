@@ -130,6 +130,29 @@ pub enum Slot {
     /// Whether React's Flight wraps the root element in an array (ADR-0008), computed by the
     /// runtime; read once before the element and once after it.
     RootWrap,
+    /// A client component element (ADR-0020): React renders its HTML, which the runtime learns
+    /// from Next.js, around its children, which are native. Its value is `[key, props,
+    /// ...record]` (as for a spread element, `__tsx2rs_el`): the key as React's `jsx` takes it,
+    /// the props without `children`, then the children's record. The encoder writes the
+    /// island's reference (`Op::Value`), the key (`Op::Value`), each prop (`Op::Value`), the HTML
+    /// before the children (`Op::Island`), the children, and the HTML after them (`Op::Island`,
+    /// only when there are children).
+    Island {
+        /// The client module's path, or the package specifier (`next/link`).
+        source: String,
+        /// The export.
+        export: Export,
+        /// The key as written.
+        key: Option<Key>,
+        /// The props, in source order: no spreads, no JSX, no `children`, no name twice.
+        props: Vec<Prop>,
+        /// Whether it has children (and so a second `Op::Island`).
+        children: bool,
+        /// The children's record.
+        record: Vec<Self>,
+        /// The element.
+        span: Range,
+    },
 }
 
 /// A call's slot records, by prop name.
@@ -210,7 +233,8 @@ pub fn component(component: &Component) -> Result<Lowered, LowerError> {
 
 /// Lowers the `index`th component of `module` with its child components linked (ADR-0012,
 /// section 5): a child that the module graph resolves to a compiled server component is inlined
-/// into the program. A child stays a `Child` hole, rendered at runtime, when it's:
+/// into the program, and a client component is an island (ADR-0020, [`Slot::Island`]). A child
+/// stays a `Child` hole, rendered at runtime, when it's:
 /// - recursive (`Call` comes later), async, or calls a hook (React renders it, ADR-0005);
 /// - given JSX props or JSX children (slots come later);
 /// - named by anything but a module-level binding, or not a component the graph knows;
@@ -304,6 +328,37 @@ struct Callee<'g> {
 }
 
 impl<'g> Link<'g> {
+    /// The client component `element` renders, with its props, when it can be an island
+    /// (ADR-0020): a module-level binding, props that are all values without a spread, no
+    /// `children` prop, and no prop given twice.
+    fn island(&self, element: &ComponentElement) -> Option<(String, Export, Vec<Prop>)> {
+        if !element.module_scope {
+            return None;
+        }
+        let tag = (&element.name, element.member.as_deref());
+        let usage::Component::Client { source, export } =
+            usage::component(self.graph, self.from(), tag.0, tag.1)
+        else {
+            return None;
+        };
+        let mut props: Vec<Prop> = Vec::new();
+        for prop in &element.props {
+            let ComponentProp::Value(prop) = prop else {
+                return None; // JSX props: React would render them inside the island
+            };
+            let name = match prop {
+                Prop::Static { name, .. } | Prop::Dynamic { name, .. } => name,
+                Prop::Spread(_) => return None,
+            };
+            let named = |p: &Prop| matches!(p, Prop::Static { name: n, .. } | Prop::Dynamic { name: n, .. } if n == name);
+            if name == "children" || props.iter().any(named) {
+                return None;
+            }
+            props.push(prop.clone());
+        }
+        Some((source, export, props))
+    }
+
     /// The module whose source is being lowered.
     fn from(&self) -> ModuleId {
         self.frames.last().map_or(ModuleId(0), |f| f.module)
@@ -453,9 +508,32 @@ impl Lowering<'_> {
         }
     }
 
-    /// A component element: inlined when it links to a compiled component, run with `Call` when
-    /// that component is already being lowered, else a `Child` hole.
-    fn component_element(&mut self, element: &ComponentElement, record: &mut Vec<Slot>) {
+    /// A component element: an island when it's a client component (not at a component's
+    /// `root`, where the runtime's key path would go in front of its key), inlined when it links
+    /// to a compiled component, run with `Call` when that component is already being lowered,
+    /// else a `Child` hole.
+    fn component_element(
+        &mut self,
+        element: &ComponentElement,
+        record: &mut Vec<Slot>,
+        root: bool,
+    ) {
+        let island = if root {
+            None
+        } else {
+            self.link.as_ref().and_then(|link| link.island(element))
+        };
+        if let Some((source, export, props)) = island {
+            let mark = self.mark();
+            if let Ok(slot) = self.island(element, source, export, props) {
+                record.push(slot);
+            } else {
+                // Its children can't be compiled: React renders the whole element.
+                self.undo(mark);
+                self.child(element.span, record);
+            }
+            return;
+        }
         let Some(callee) = self.link.as_ref().and_then(|link| link.callee(element)) else {
             self.child(element.span, record);
             return;
@@ -490,6 +568,52 @@ impl Lowering<'_> {
             self.undo(mark);
             self.child(element.span, record);
         }
+    }
+
+    /// A client component element as an island (ADR-0020): in Flight, React's element tuple with
+    /// the island's reference as its type; in HTML, the island's own markup around its children.
+    fn island(
+        &mut self,
+        element: &ComponentElement,
+        source: String,
+        export: Export,
+        props: Vec<Prop>,
+    ) -> Result<Slot, LowerError> {
+        self.structure(b"", br#"["$","#);
+        self.op(Op::Value); // the reference
+        self.structure(b"", b",");
+        self.op(Op::Value); // the key
+        self.structure(b"", b",{");
+        for (i, prop) in props.iter().enumerate() {
+            if let Prop::Static { name, .. } | Prop::Dynamic { name, .. } = prop {
+                if i > 0 {
+                    self.structure(b"", b",");
+                }
+                self.structure(b"", &fold::prop_key(name));
+                self.op(Op::Value);
+            }
+        }
+        self.op(Op::Island);
+        let children = !element.children.is_empty();
+        let mut record = Vec::new();
+        if children {
+            if !props.is_empty() {
+                self.structure(b"", b",");
+            }
+            self.structure(b"", br#""children":"#);
+            self.children_value(&element.children, &mut record)?;
+            self.op(Op::Island);
+        }
+        self.structure(b"", b"}]");
+        Ok(Slot::Island {
+            source,
+            export,
+            key: element.key.clone(),
+            props,
+            children,
+            record,
+            span: element.span,
+        })
     }
 
     /// Inlines a callee's templates here, with its caller's slots placed where it places them.
@@ -710,6 +834,10 @@ impl Lowering<'_> {
                 Ok(())
             }
             Node::Conditional(conditional) => self.conditional(conditional, record, true),
+            Node::Component(element) => {
+                self.component_element(element, record, true);
+                Ok(())
+            }
             node => self.node(node, record),
         }
     }
@@ -749,7 +877,7 @@ impl Lowering<'_> {
             Node::Fragment(children) => self.children_value(children, record),
             Node::Hole(span) => self.hole(*span, record),
             Node::Component(element) => {
-                self.component_element(element, record);
+                self.component_element(element, record, false);
                 Ok(())
             }
             Node::ElementValue(value) => {

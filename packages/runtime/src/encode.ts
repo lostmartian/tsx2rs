@@ -177,6 +177,42 @@ export function reference(w: Input, ref: string): void {
   w.string(ref);
 }
 
+/** What Next.js rendered for a client component element (ADR-0020), learned from its responses. */
+export interface Island {
+  /** Its Flight reference (`$L15`): the element's type. */
+  readonly ref: string;
+  /** Its HTML before its children (all of it, without children). */
+  readonly before: string;
+  /** Its HTML after its children. */
+  readonly after: string;
+}
+
+/**
+ * Resolves the `index`th client component of a route's encoder (in the order its manifest lists
+ * them), rendered with `props` (without `children`), each time it's met in render order.
+ */
+export type Islands = (index: number, props: Record<string, unknown>) => Island;
+
+/** A client component element's island, or {@link NotNative} when there's no resolver. */
+export function island(
+  islands: Islands | undefined,
+  index: number,
+  props: Record<string, unknown>,
+): Island {
+  if (islands === undefined)
+    throw new NotNative("a client component element, not learned yet", props);
+  return islands(index, props);
+}
+
+/**
+ * `Op::Island`: HTML as React wrote it. Its text-edge flags are 0: a learned island's HTML
+ * includes the `<!-- -->` separators React wrote next to it.
+ */
+export function html(w: Input, markup: string): void {
+  w.string(markup);
+  w.u8(0);
+}
+
 /**
  * `Op::Attributes`: a props object built as JSX builds it (the data function has taken `key`
  * out, and an element with a `children` prop is an element value, not attributes).
