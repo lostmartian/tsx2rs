@@ -69,11 +69,13 @@ The only bridge to Node.js (napi-rs), published as `@tsx2rs/native`. Thin: conve
 - **`modifyConfig`** (production builds only): compiles the app's pages once (`compileApp`), and adds a loader for Turbopack and webpack that runs on server bundles only.
 - **The loader** appends each compiled server module's data functions to it in Next.js's own bundle, next to the unchanged original code, and registers them under the module's path (`globalThis[Symbol.for("tsx2rs.data")]`).
 - **`onBuildComplete`** writes the **manifest** (`<distDir>/tsx2rs/manifest.json`: versioned JSON listing each page route, its pathnames and Next.js entrypoint, and either its program and encoder files or its fallback reasons) and prints *compiled* or *falls back: reason* for every route.
-- *Planned (7.3):* capturing Next.js's wrapper around the page (document, router tree, layout payload).
+- **The wrapper** around the page isn't captured at build time: the runtime learns it from real responses (`@tsx2rs/runtime/capture`, ADR-0018).
 
 ### `packages/runtime`
 `@tsx2rs/runtime`: what runs at request time.
 - **Encoding** (`encode`, [ADR-0016](docs/adr/0016-generated-encoder.md)): the input writer, an encoder per hole kind, pending calls and key paths, for the generated encoders; values the engine can't take natively are `NotNative`, for the hand-off to React
+
+- **Capture** (`capture`, [ADR-0018](docs/adr/0018-capturing-the-wrapper.md)): Next.js's wrapper around a compiled page (document, layouts, router state), learned from a response Next.js served, with the page's fragments, the URL and the params as slots, confirmed by a response with other params, and filled per request; a response that differs in ways the slots don't explain refuses the route
 
 The HTTP server is *planned* (step 8):
 - Routing (`@next/routing`, the same resolver Next.js uses)
