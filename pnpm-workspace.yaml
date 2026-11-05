@@ -1,6 +1,7 @@
 packages:
   - packages/*
   - packages/adapter/test-e2e/app
+  - tests/apps/commerce
   - tests/identity
   - tests/differential
   - tests/fixtures/*
