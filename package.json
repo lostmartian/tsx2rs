@@ -17,7 +17,8 @@
     "test:coverage": "vitest run --coverage",
     "test:identity": "vitest run --config tests/identity/vitest.e2e.config.ts",
     "check": "bash scripts/check.sh",
-    "test:adapter": "vitest run --config packages/adapter/vitest.e2e.config.ts"
+    "test:adapter": "vitest run --config packages/adapter/vitest.e2e.config.ts",
+    "test:runtime": "vitest run --config packages/runtime/vitest.e2e.config.ts"
   },
   "devDependencies": {
     "@commitlint/cli": "21.2.4",

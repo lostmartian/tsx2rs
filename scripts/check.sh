@@ -20,6 +20,7 @@ step "Format";              pnpm format:check
 step "TypeScript: tests";   pnpm test
 step "Identity: Next.js fixtures"; pnpm test:identity
 step "Adapter: next build";   pnpm test:adapter
+step "Runtime: vs next start"; pnpm test:runtime
 step "Differential: engine vs React"; cargo nextest run -p tsx2rs_differential --locked
 
 printf '\n\033[1;32mAll checks passed.\033[0m\n'

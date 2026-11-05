@@ -8,7 +8,7 @@ import type { App, DataFunction } from "@tsx2rs/native";
 import { sourcePage } from "./pages.ts";
 
 /** The manifest format's version: bumped on every incompatible change. */
-export const MANIFEST_VERSION = 1;
+export const MANIFEST_VERSION = 2;
 
 /** A page route in the manifest. */
 export interface ManifestRoute {
@@ -36,7 +36,36 @@ export interface Manifest {
   version: typeof MANIFEST_VERSION;
   nextVersion: string;
   buildId: string;
+  /** What the runtime needs to route requests as `next start` does (`@next/routing`). */
+  next: NextBuild;
   routes: ManifestRoute[];
+}
+
+/** Next.js's build, as `onBuildComplete` describes it. */
+export interface NextBuild {
+  basePath: string;
+  /** `config.i18n`, or `null`. */
+  i18n: unknown;
+  /** The routing rules (`onBuildComplete`'s `routing`), for `resolveRoutes`. */
+  routing: unknown;
+  /** Every output: pages, route handlers, prerenders, static files, middleware. */
+  outputs: NextOutput[];
+  /** `config.images`, for `/_next/image`. */
+  images: unknown;
+  /** `config.generateEtags`: whether static files get ETags. */
+  generateEtags: boolean;
+}
+
+/** One of Next.js's build outputs. */
+export interface NextOutput {
+  /** `APP_PAGE`, `APP_ROUTE`, `PAGES`, `PAGES_API`, `PRERENDER`, `STATIC_FILE` or `MIDDLEWARE`. */
+  type: string;
+  id: string;
+  pathname: string;
+  /** Its entrypoint or file, relative to the project; `null` for a prerender without one. */
+  file: string | null;
+  /** A prerender's page output (its `id`). */
+  parent?: string;
 }
 
 /** What Next.js says it built for each app page (`outputs.appPages`). */
@@ -52,7 +81,7 @@ export function writeManifest(
   projectDir: string,
   app: App,
   built: BuiltPage[],
-  meta: { nextVersion: string; buildId: string },
+  meta: { nextVersion: string; buildId: string; next: NextBuild },
 ): Manifest {
   mkdirSync(join(dir, "programs"), { recursive: true });
   mkdirSync(join(dir, "encoders"), { recursive: true });

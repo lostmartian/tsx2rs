@@ -84,7 +84,29 @@ describe("the adapter", () => {
     await adapter.onBuildComplete?.({
       outputs: {
         appPages: [built("/page", "/"), built("/page", "/index.rsc"), built("/c/page", "/c")],
+        appRoutes: [],
+        pages: [],
+        pagesApi: [],
+        prerenders: [
+          {
+            type: "PRERENDER",
+            id: "/c",
+            pathname: "/c",
+            parentOutputId: "/c",
+            fallback: { filePath: join(distDir, "server/app/c.html") },
+          },
+        ],
+        staticFiles: [
+          {
+            type: "STATIC_FILE",
+            id: "s",
+            pathname: "/_next/static/x.js",
+            filePath: join(distDir, "static/x.js"),
+          },
+        ],
       },
+      routing: { beforeMiddleware: [] },
+      config: { basePath: "", images: { formats: ["image/webp"] }, generateEtags: true },
       distDir,
       projectDir: root,
       buildId: "b1",
@@ -95,6 +117,26 @@ describe("the adapter", () => {
     ) as Manifest;
     expect(manifest.version).toBe(MANIFEST_VERSION);
     expect(manifest.buildId).toBe("b1");
+    // What the runtime routes with, paths relative to the project.
+    expect(manifest.next).toMatchObject({
+      basePath: "",
+      i18n: null,
+      routing: { beforeMiddleware: [] },
+      images: { formats: ["image/webp"] },
+    });
+    expect(manifest.next.outputs).toContainEqual({
+      type: "PRERENDER",
+      id: "/c",
+      pathname: "/c",
+      file: ".next/server/app/c.html",
+      parent: "/c",
+    });
+    expect(manifest.next.outputs).toContainEqual({
+      type: "STATIC_FILE",
+      id: "s",
+      pathname: "/_next/static/x.js",
+      file: ".next/static/x.js",
+    });
     const home = manifest.routes.find((r) => r.page === "app/page.tsx");
     expect(home).toMatchObject({
       pathnames: ["/", "/index.rsc"],
@@ -137,6 +179,7 @@ describe("report", () => {
       version: MANIFEST_VERSION,
       nextVersion: "16.4.3",
       buildId: "b",
+      next: { basePath: "", i18n: null, routing: {}, outputs: [], images: {}, generateEtags: true },
       routes: [
         { page: "a", pathnames: [], entrypoint: null, compiled: true, reasons: [] },
         { page: "b", pathnames: [], entrypoint: null, compiled: false, reasons: ["x", "y"] },

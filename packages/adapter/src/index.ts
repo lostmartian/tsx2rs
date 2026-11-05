@@ -13,10 +13,10 @@
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { compileApp, type App } from "@tsx2rs/native";
 import type { NextAdapter } from "next";
-import { report, writeManifest } from "./manifest.ts";
+import { report, writeManifest, type NextBuild, type NextOutput } from "./manifest.ts";
 import { findPages } from "./pages.ts";
 
 const require = createRequire(import.meta.url);
@@ -26,6 +26,35 @@ const loader = require.resolve("@tsx2rs/adapter/loader");
  * `onBuildComplete`: outside `distDir`, which Next.js cleans as the build starts. */
 function buildFile(projectDir: string): string {
   return join(projectDir, "node_modules", ".cache", "tsx2rs", "build.json");
+}
+
+type Outputs = Parameters<NonNullable<NextAdapter["onBuildComplete"]>>[0]["outputs"];
+
+/** Every build output, with paths relative to the project. */
+function nextOutputs(outputs: Outputs, projectDir: string): NextOutput[] {
+  const rel = (file: string | undefined) =>
+    file === undefined ? null : relative(projectDir, file).replaceAll("\\", "/");
+  const routes = [
+    ...outputs.appPages,
+    ...outputs.appRoutes,
+    ...outputs.pages,
+    ...outputs.pagesApi,
+    ...(outputs.middleware ? [outputs.middleware] : []),
+  ].map((o) => ({ type: o.type, id: o.id, pathname: o.pathname, file: rel(o.filePath) }));
+  const prerenders = outputs.prerenders.map((o) => ({
+    type: o.type,
+    id: o.id,
+    pathname: o.pathname,
+    file: rel(o.fallback?.filePath),
+    parent: o.parentOutputId,
+  }));
+  const statics = outputs.staticFiles.map((o) => ({
+    type: o.type,
+    id: o.id,
+    pathname: o.pathname,
+    file: rel(o.filePath),
+  }));
+  return [...routes, ...prerenders, ...statics];
 }
 
 /** The part of webpack's config the adapter touches. */
@@ -71,15 +100,24 @@ const adapter: NextAdapter = {
     };
   },
 
-  onBuildComplete({ outputs, distDir, projectDir, buildId, nextVersion }) {
+  onBuildComplete({ outputs, routing, config, distDir, projectDir, buildId, nextVersion }) {
     const saved = JSON.parse(readFileSync(buildFile(projectDir), "utf8")) as App;
     for (const route of saved.routes) {
       if (route.program !== undefined)
         route.program = Buffer.from(route.program as unknown as string, "base64");
     }
+    const next: NextBuild = {
+      basePath: config.basePath,
+      i18n: config.i18n ?? null,
+      routing,
+      outputs: nextOutputs(outputs, projectDir),
+      images: config.images,
+      generateEtags: config.generateEtags,
+    };
     const manifest = writeManifest(join(distDir, "tsx2rs"), projectDir, saved, outputs.appPages, {
       nextVersion,
       buildId,
+      next,
     });
     for (const line of report(manifest)) console.log(line);
   },
