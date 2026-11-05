@@ -734,6 +734,31 @@ fn writes_generic_values_to_flight_only() {
 }
 
 #[test]
+fn writes_flight_references_unescaped_and_rejects_anything_else() {
+    let p = Builder::default().op(Op::Value).build();
+    let reference = |r: &str| {
+        input(|w| {
+            w.tag(tag::REFERENCE).string(r);
+        })
+    };
+    assert_eq!(
+        run(&p, &reference("$L15")),
+        (String::new(), r#""$L15""#.into())
+    );
+    assert_eq!(
+        run(&p, &reference("$@a0")),
+        (String::new(), r#""$@a0""#.into())
+    );
+    for bad in ["L15", "$", "$Lx", "$L1\"", "$LL1"] {
+        assert_eq!(
+            error(&p, &reference(bad)),
+            RenderError::InvalidValue { offset: 0 },
+            "{bad}"
+        );
+    }
+}
+
+#[test]
 fn renders_runtime_children_by_their_kind() {
     let p = Builder::default()
         .stat("<p>", "")

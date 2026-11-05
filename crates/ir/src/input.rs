@@ -12,7 +12,7 @@
 //! | [`Op::If`](crate::Op::If) | `u8`: 0 false, 1 true |
 //! | [`Op::Loop`](crate::Op::Loop) | `u32` LE count |
 //! | [`Op::Island`](crate::Op::Island) | string (React's HTML), then a flags byte ([`island::TEXT_START`], [`island::TEXT_END`]) |
-//! | [`Op::Value`](crate::Op::Value) | a tagged value: any [`tag`], arrays as `u32` count + values, objects as `u32` count + (string key, value) pairs |
+//! | [`Op::Value`](crate::Op::Value) | a tagged value: any [`tag`] (including [`tag::REFERENCE`]), arrays as `u32` count + values, objects as `u32` count + (string key, value) pairs |
 //! | [`Op::Child`](crate::Op::Child) | a tagged node: [`tag::UNDEFINED`], [`tag::NULL`], [`tag::FALSE`], [`tag::TRUE`], [`tag::NUMBER`], [`tag::STRING`], [`tag::BIGINT`], [`tag::ARRAY`] with `u32` count + nodes, [`tag::ELEMENT`] (below), or [`tag::TEMPLATE`] with a `u32` template index + that template's input |
 //!
 //! An element node (ADR-0007) is a host element, its props in the props object's order:
@@ -53,6 +53,10 @@ pub mod tag {
     /// A compiled component's output (a node, ADR-0008): a `u32` LE template index, then that
     /// template's input.
     pub const TEMPLATE: u8 = 10;
+    /// A Flight reference to another row (a string follows): `$`, then an optional letter or `@`,
+    /// then lowercase hex digits (`$L15`, `$3`, `$@a`). Written as it is, without React's `$`
+    /// escape: a client component's type is one (ADR-0020). Only `Op::Value` reads it.
+    pub const REFERENCE: u8 = 11;
 }
 
 /// Flags for [`Op::Island`](crate::Op::Island): the island's HTML begins / ends with text.

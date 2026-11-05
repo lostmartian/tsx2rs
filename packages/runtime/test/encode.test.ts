@@ -9,6 +9,7 @@ import {
   call,
   node,
   primitive,
+  reference,
   rootKey,
   style,
   value,
@@ -43,6 +44,7 @@ const T = {
   object: 7,
   bigint: 8,
   element: 9,
+  reference: 11,
 };
 
 describe("primitive", () => {
@@ -164,6 +166,26 @@ describe("style and value", () => {
         value(w, new Map());
       }),
     ).toThrow(NotNative);
+  });
+
+  it("writes Flight references with their own tag, and nothing else as one", () => {
+    expect(
+      bytes((w) => {
+        reference(w, "$L15");
+      }),
+    ).toEqual([T.reference, ...str("$L15")]);
+    for (const ok of ["$3", "$@a", "$a"]) {
+      expect(
+        bytes((w) => {
+          reference(w, ok);
+        })[0],
+      ).toBe(T.reference);
+    }
+    for (const bad of ["L15", "$", "$Lx", "$LL1", "$L1A"]) {
+      expect(() => {
+        reference(new Input(), bad);
+      }).toThrow("not a Flight reference");
+    }
   });
 });
 

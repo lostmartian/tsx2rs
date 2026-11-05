@@ -441,6 +441,11 @@ impl<'p> Renderer<'p, '_> {
             tag::NUMBER => flight::number(out, input.f64()?),
             tag::STRING => flight::string(out, input.string()?),
             tag::BIGINT => flight::bigint(out, input.bigint()?),
+            tag::REFERENCE => {
+                if !flight::reference(out, input.string()?) {
+                    return Err(RenderError::InvalidValue { offset });
+                }
+            }
             tag::ARRAY => {
                 let count = input.u32()?;
                 self.out.flight.push(b'[');

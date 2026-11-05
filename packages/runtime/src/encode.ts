@@ -20,6 +20,7 @@ const TAG = {
   object: 7,
   bigint: 8,
   element: 9,
+  reference: 11,
 } as const;
 
 /** A value the engine can't take natively, and why. */
@@ -160,6 +161,20 @@ export function value(w: Input, v: unknown): void {
   } else {
     primitive(w, v);
   }
+}
+
+/** Matches the Flight references the engine writes as they are (`tsx2rs_ir::input::tag::REFERENCE`). */
+const REFERENCE = /^\$[A-Za-z@]?[0-9a-f]+$/;
+
+/**
+ * A Flight reference to another row inside an `Op::Value`, such as a client component's type
+ * (`$L15`, ADR-0020). React writes it unescaped, where a string value starting with `$` gets a
+ * second `$`.
+ */
+export function reference(w: Input, ref: string): void {
+  if (!REFERENCE.test(ref)) throw new Error(`not a Flight reference: ${JSON.stringify(ref)}`);
+  w.u8(TAG.reference);
+  w.string(ref);
 }
 
 /**
