@@ -159,12 +159,17 @@ describe("the tsx2rs server, for a compiled route", () => {
     expect(await res.text()).toBe("");
   });
 
-  it("refuses a page it can't render natively yet, and Next.js keeps serving it", async () => {
-    const { next, ours } = await both("/p/5");
-    expect(ours).toEqual(next);
-    expect((await state())["/p/[n]"]).toMatchObject({
-      state: "refused",
-      reason: "tsx2rs can't render it: a client component element, not learned yet",
-    });
+  it("learns a client component's island from Next.js, then serves the page itself", async () => {
+    // `/p/5` was answered by Next.js above, and taught the route `<Counter />` for that request.
+    expect((await state())["/p/[n]"]).toMatchObject({ state: "learned" });
+    for (const path of ["/p/5", "/p/6", "/p/6"]) {
+      const [n, ours] = [await headers(nextUrl, path), await headers(oursUrl, path)];
+      expect(ours.body).toBe(n.body);
+      expect(ours.headers).toEqual(n.headers);
+    }
+    // `/p/6`'s island was learned from Next.js's response, which also confirmed the wrapper.
+    expect((await state())["/p/[n]"]).toMatchObject({ state: "served" });
+    expect((await headers(oursUrl, "/p/5")).compiled).toBe("compiled");
+    expect((await headers(oursUrl, "/p/6")).compiled).toBe("compiled");
   });
 });

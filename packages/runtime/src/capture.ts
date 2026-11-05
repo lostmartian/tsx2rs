@@ -144,6 +144,19 @@ function parse(document: string): Parsed {
   return out;
 }
 
+/**
+ * The document as text between Flight scripts, and the scripts' chunks, decoded; empty for a
+ * document whose scripts Next.js 16.4 didn't write.
+ */
+export function decode(document: string): Parsed {
+  try {
+    return parse(document);
+  } catch (error) {
+    if (error instanceof Refused) return [];
+    throw error;
+  }
+}
+
 /** Every occurrence of `needle` in `parts`' text, as [part index, offset]. */
 function occurrences(parts: Part[], needle: string): [number, number][] {
   const found: [number, number][] = [];

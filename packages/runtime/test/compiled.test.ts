@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
-import { createGzip } from "node:zlib";
+import { createGzip, gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Route, type CompiledRoute, type Renderer, type Compress } from "../src/compiled.js";
 import { decision, variant } from "../src/server.js";
@@ -73,6 +73,15 @@ async function next(req: IncomingMessage, res: ServerResponse) {
     res.writeHead(404, { "content-type": "text/plain" }).end("not found");
     return;
   }
+  // Compressed when the client asks, as `next start` does.
+  if (acceptEncoding?.includes("gzip")) {
+    const body = gzipSync(doc);
+    res.writeHead(200, { ...HEADERS, "content-encoding": "gzip" });
+    res.write(body.subarray(0, 50));
+    await new Promise((r) => setTimeout(r, 1));
+    res.end(body.subarray(50));
+    return;
+  }
   res.writeHead(200, HEADERS);
   res.write(doc.slice(0, 100));
   await new Promise((r) => setTimeout(r, 1));
@@ -130,12 +139,13 @@ describe("a compiled route", () => {
     };
   };
 
-  it("lets Next.js answer while it learns, without compression, and keeps the document", async () => {
+  it("lets Next.js answer while it learns, compressed as asked, and keeps the document", async () => {
     const calls = nextCalls;
     const r = await get("/q/3", { headers: { "accept-encoding": "gzip" } });
+    // fetch decodes the gzip; the route learned from the decompressed copy.
     expect(r).toEqual({ compiled: null, type: HEADERS["content-type"], body: docs["3"] });
     expect(nextCalls).toBe(calls + 1);
-    expect(acceptEncoding).toBeUndefined();
+    expect(acceptEncoding).toBe("gzip");
     expect(route.state).toEqual({ state: "learned", params: { n: "3" } });
   });
 

@@ -10,18 +10,25 @@
  * From then on the route is **served**: data function, encoder, engine, `fill`, with Next.js's
  * status and headers. Anything that goes wrong on tsx2rs's side **refuses** the route, which
  * Next.js then serves, with the reason recorded:
- * - a value the engine can't take natively (`NotNative`: a client component, for now);
+ * - a value the engine can't take natively (`NotNative`);
  * - a data function that throws (one that reads Next.js's request context, for now);
  * - a response that differs in ways the slots don't explain.
+ *
+ * A page with client components renders their islands from what it learned for the same request
+ * (ADR-0020). A request it hasn't learned them for goes to Next.js, rendered with placeholders,
+ * and the runtime learns them from Next.js's response before it learns or confirms the wrapper.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { Duplex } from "node:stream";
+import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import { pathToFileURL } from "node:url";
 import { Program } from "@tsx2rs/native";
 import { confirm, confirmed, fill, learn, type Fragment, type Template } from "./capture.ts";
+import type { Islands } from "./encode.ts";
+import { IslandCache, Miss, learnIslands, placeholders, type Call } from "./islands.ts";
 
 /** A compiled page route in the manifest. */
 export interface CompiledRoute {
@@ -40,7 +47,7 @@ interface DataFunctionName {
 }
 
 type DataFunction = (props: unknown) => unknown;
-type Encode = (record: unknown, data: DataFunction[]) => Uint8Array;
+type Encode = (record: unknown, data: DataFunction[], islands?: Islands) => Uint8Array;
 
 /** Where a compiled route stands. */
 export type RouteState =
@@ -65,8 +72,12 @@ interface Head {
   headers: Record<string, string | string[]>;
 }
 
-/** Headers that belong to one response's transfer, not to the document. */
+/**
+ * Headers that belong to one response's transfer, not to the document (served pages are
+ * compressed per request, as `next start` compresses them).
+ */
 const TRANSFER = new Set([
+  "content-encoding",
   "transfer-encoding",
   "content-length",
   "date",
@@ -135,6 +146,7 @@ export class Route {
   /** Set when tsx2rs can't render the route at all: every variant is Next.js's. */
   private refused: string | undefined;
   private readonly variants = new Map<string, Variant>();
+  private readonly islands = new IslandCache();
   private readonly render: Renderer;
   /** Next.js's `compression` middleware, as `next start` applies it (unless `compress: false`). */
   private readonly compress: Compress | undefined;
@@ -175,10 +187,20 @@ export class Route {
       await next(req, res);
       return;
     }
-    const fragments = await this.render(request).catch((error: unknown) => {
-      this.refused = `tsx2rs can't render it: ${error instanceof Error ? error.message : String(error)}`;
-      return undefined;
-    });
+    // The islands learned for this request, or placeholders to learn them with.
+    const url = `${request.variant ?? ""}\0${request.pathname}${request.search}`;
+    let pending: Call[] | undefined;
+    const fragments = await this.render(request, this.islands.resolver(url))
+      .catch((error: unknown) => {
+        if (!(error instanceof Miss)) throw error;
+        const learning = placeholders();
+        pending = learning.calls;
+        return this.render(request, learning.islands);
+      })
+      .catch((error: unknown) => {
+        this.refused = `tsx2rs can't render it: ${error instanceof Error ? error.message : String(error)}`;
+        return undefined;
+      });
     if (fragments === undefined) {
       await next(req, res);
       return;
@@ -189,7 +211,12 @@ export class Route {
       search: request.search,
       fragments: Object.fromEntries(fragments.map((f) => [f.name, f])),
     };
-    if (variant.template && variant.head && variant.canFill(request.params)) {
+    if (
+      pending === undefined &&
+      variant.template &&
+      variant.head &&
+      variant.canFill(request.params)
+    ) {
       const body = fill(variant.template, values);
       if (this.compress) {
         this.compress(req, res, () => undefined);
@@ -203,20 +230,39 @@ export class Route {
       res.end(req.method === "HEAD" ? undefined : body);
       return;
     }
-    // The copy is the document only uncompressed: this one response isn't compressed.
-    delete req.headers["accept-encoding"];
     const learning = variant;
+    const calls = pending;
     await tee(req, res, next, (response) => {
       const type = response.headers["content-type"];
       const html = typeof type === "string" && type.startsWith("text/html");
-      if (response.status === 200 && html)
-        learning.study({ document: response.body, ...values, fragments }, response);
+      if (response.status !== 200 || !html) return;
+      let learned = fragments;
+      if (calls !== undefined) {
+        const page = fragments.find((f) => f.name === "page");
+        const islands = page && learnIslands(response.body, page, calls);
+        if (!islands?.ok) {
+          learning.refuse(islands?.reason ?? "no page fragment");
+          return;
+        }
+        this.islands.set(url, calls, islands.islands);
+        learned = fragments.map((f) =>
+          f.name === "page" ? { name: f.name, html: islands.html, flight: islands.flight } : f,
+        );
+      }
+      learning.study(
+        {
+          document: response.body,
+          ...values,
+          fragments: learned,
+        },
+        response,
+      );
     });
   }
 }
 
-/** What a route renders per request: its fragments (ADR-0018). */
-export type Renderer = (request: Request) => Promise<Fragment[]>;
+/** What a route renders per request: its fragments (ADR-0018), with its islands (ADR-0020). */
+export type Renderer = (request: Request, islands?: Islands) => Promise<Fragment[]>;
 
 /**
  * The renderer of a compiled route of the app in `dir`: the page's data function (from the
@@ -254,14 +300,14 @@ export function renderer(route: CompiledRoute, dir: string, manifestDir: string)
     })();
     return loaded;
   };
-  return async (request) => {
+  return async (request, islands) => {
     const { program, encode, entry, callees } = await load();
     const props = {
       params: Promise.resolve(request.params),
       searchParams: Promise.resolve(request.query),
     };
     const record = await entry(props);
-    const input = encode(record, callees);
+    const input = encode(record, callees, islands);
     const out = program.render(Buffer.from(input.buffer, input.byteOffset, input.byteLength));
     if (out.head !== "" || out.hints !== "") {
       throw new Error("the page hoists into <head> (not yet served by tsx2rs)");
@@ -287,6 +333,23 @@ function release(res: ServerResponse): void {
     return;
   }
   stream.destroy();
+}
+
+/** A response body as sent with `encoding`, decompressed; `undefined` for an unknown encoding. */
+function decompress(body: Buffer, encoding: string | string[] | undefined): Buffer | undefined {
+  switch (encoding) {
+    case undefined:
+    case "identity":
+      return body;
+    case "gzip":
+      return gunzipSync(body);
+    case "deflate":
+      return inflateSync(body);
+    case "br":
+      return brotliDecompressSync(body);
+    default:
+      return undefined;
+  }
 }
 
 /** Calls every segment getter in Next.js's loader tree: that evaluates the route's modules. */
@@ -354,7 +417,14 @@ async function tee(
         headers[name] = typeof value === "number" ? String(value) : value;
     }
     try {
-      done({ status: res.statusCode, headers, body: Buffer.concat(chunks).toString("utf8") });
+      // Next.js compressed what the client asked it to: the copy is the document decompressed.
+      const encoding = given["content-encoding"] ?? res.getHeader("content-encoding");
+      const body = decompress(
+        Buffer.concat(chunks),
+        typeof encoding === "number" ? String(encoding) : encoding,
+      );
+      if (body !== undefined)
+        done({ status: res.statusCode, headers, body: body.toString("utf8") });
     } finally {
       end(chunk, ...rest);
     }
