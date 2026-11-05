@@ -120,7 +120,7 @@ impl<'a> Input<'a> {
             tag::NUMBER => {
                 self.f64()?;
             }
-            tag::STRING => {
+            tag::STRING | tag::REFERENCE => {
                 self.string()?;
             }
             tag::BIGINT => {

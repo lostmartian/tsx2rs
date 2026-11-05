@@ -25,5 +25,6 @@ Format: [MADR](https://adr.github.io/madr/)-style. Context → Decision → Cons
 | [0017](0017-adapter-build.md) | The adapter's build: compile before bundling, data functions in Next.js's own bundle | Accepted |
 | [0018](0018-capturing-the-wrapper.md) | Next.js's wrapper is captured from real responses, then confirmed | Accepted |
 | [0019](0019-runtime-server.md) | The runtime server hands everything it doesn't serve to Next.js's own request handler | Accepted |
+| [0020](0020-islands.md) | Client component islands are learned from Next.js's responses | Accepted |
 
 Background research (benchmarks, spikes, the full decision history before this repository existed) lives in the separate `tsx2rs-lab` repository.

@@ -4,6 +4,30 @@
 
 use crate::input::Primitive;
 
+/// Writes a Flight reference to another row (`$L15`, `$3`, `$@a`) as it is, without React's `$`
+/// escape. Returns `false`, writing nothing, for anything else, so input can't inject Flight
+/// syntax through it.
+pub(crate) fn reference(out: &mut Vec<u8>, s: &str) -> bool {
+    let hex = |d: &str| {
+        !d.is_empty()
+            && d.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    };
+    // `$`, an optional letter or `@`, then hex digits: `$a` is the hex reference `a`.
+    let valid = s.strip_prefix('$').is_some_and(|rest| {
+        hex(rest)
+            || rest
+                .strip_prefix(|c: char| c.is_ascii_alphabetic() || c == '@')
+                .is_some_and(hex)
+    });
+    if valid {
+        out.push(b'"');
+        out.extend_from_slice(s.as_bytes());
+        out.push(b'"');
+    }
+    valid
+}
+
 /// Writes a string value: React's `escapeStringValue` (a leading `$` becomes `$$`), then
 /// `JSON.stringify`.
 pub(crate) fn string(out: &mut Vec<u8>, s: &str) {
@@ -96,12 +120,28 @@ pub(crate) const UNDEFINED: &[u8] = b"\"$undefined\"";
 
 #[cfg(test)]
 mod tests {
-    use super::{bigint, key, number, string};
+    use super::{bigint, key, number, reference, string};
 
     fn written(f: impl Fn(&mut Vec<u8>)) -> String {
         let mut out = Vec::new();
         f(&mut out);
         String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn writes_references_as_they_are_and_only_references() {
+        for r in ["$L15", "$3", "$@a", "$Q1f", "$a"] {
+            let mut out = Vec::new();
+            assert!(reference(&mut out, r), "{r}");
+            assert_eq!(String::from_utf8(out).unwrap(), format!("\"{r}\""));
+        }
+        for bad in [
+            "", "$", "$L", "L15", "$L1G", "$L1\"]", "$Lff,\"x", "$LL1", "$-1",
+        ] {
+            let mut out = Vec::new();
+            assert!(!reference(&mut out, bad), "{bad}");
+            assert_eq!(out, b"");
+        }
     }
 
     #[test]
