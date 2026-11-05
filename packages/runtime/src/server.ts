@@ -6,14 +6,16 @@
  * image optimization, middleware, 404s.
  *
  * Which requests are tsx2rs's is decided with Next.js's own resolver, `@next/routing`, and the
- * build's routing rules (from the manifest `next build` wrote with `@tsx2rs/adapter`). Serving
- * compiled routes comes in step 8.3; until then every request goes to Next.js.
+ * build's routing rules (from the manifest `next build` wrote with `@tsx2rs/adapter`). A GET or
+ * HEAD page load of a compiled route goes to its `Route` (`compiled.ts`), which learns Next.js's
+ * wrapper from Next.js's own responses before it serves anything itself (ADR-0018).
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import type { ResolveRoutesParams, ResolveRoutesResult } from "@next/routing";
+import { compression, renderer, Route, type CompiledRoute, type RouteState } from "./compiled.ts";
 
 // `@next/routing` is CommonJS without named ES exports.
 const { resolveRoutes } = createRequire(import.meta.url)("@next/routing") as {
@@ -30,7 +32,9 @@ export interface Manifest {
     i18n: ResolveRoutesParams["i18n"] | null;
     routing: ResolveRoutesParams["routes"];
     outputs: { type: string; id: string; pathname: string; file: string | null; parent?: string }[];
+    compress: boolean;
   };
+  routes: (Partial<CompiledRoute> & { page: string; pathnames: string[]; compiled: boolean })[];
 }
 
 /** The manifest format this server reads. */
@@ -39,6 +43,10 @@ export const MANIFEST_VERSION = 2;
 export const NEXT_VERSION = "16.4.3";
 
 type RequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+
+/** Next.js's prefixes for route params and interception markers in route matches and queries. */
+const PARAM = "nxtP";
+const INTERCEPTION = "nxtI";
 
 /** Next.js's custom-server API (`next`). */
 type CreateNext = (options: { dir: string; dev: false; quiet?: boolean }) => {
@@ -51,10 +59,14 @@ export interface Options {
   dir: string;
   /** Next.js's `distDir`, relative to `dir`. */
   distDir?: string;
+  /** Answer `GET /__tsx2rs` with every compiled route's state (for tests; off by default). */
+  status?: boolean;
 }
 
 /** Whether tsx2rs serves a request (`route`: its page's pathname), or Next.js does, and why. */
-export type Decision = { route: string } | { fallback: string };
+export type Decision =
+  | { route: string; params: Record<string, string>; query: Record<string, string | string[]> }
+  | { fallback: string };
 
 /** Loads the build in `dir` and returns a request handler for it, and how it decides requests. */
 export async function createHandler(options: Options): Promise<{
@@ -84,6 +96,20 @@ export async function createHandler(options: Options): Promise<{
         ? "the app has middleware (proxy.ts)"
         : undefined;
 
+  const manifestDir = join(dir, distDir, "tsx2rs");
+  const compiled = new Map<string, Route>();
+  for (const r of manifest.routes) {
+    if (!r.compiled || !r.entrypoint || !r.program || !r.encoder || !r.entry || !r.callees)
+      continue;
+    const route = new Route(
+      r as CompiledRoute,
+      renderer(r as CompiledRoute, dir, manifestDir),
+      build.compress ? compression(dir) : undefined,
+    );
+    for (const pathname of r.pathnames)
+      if (!pathname.endsWith(".rsc")) compiled.set(pathname, route);
+  }
+
   const createNext = app("next") as CreateNext;
   const nextApp = createNext({ dir, dev: false, quiet: true });
   await nextApp.prepare();
@@ -109,17 +135,69 @@ export async function createHandler(options: Options): Promise<{
       routes: build.routing,
       invokeMiddleware: () => Promise.resolve({}),
     });
-    if (resolved.resolvedPathname === undefined) return { fallback: "no route" };
-    // Serving compiled routes comes with step 8.3.
-    return { fallback: `${resolved.resolvedPathname} isn't served by tsx2rs yet` };
+    return decision(resolved, compiled);
   }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (options.status && req.url === "/__tsx2rs") {
+      const states: Record<string, RouteState> = {};
+      for (const [pathname, route] of compiled) states[pathname] = route.state;
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(states));
+      return;
+    }
     const decision = await decide(req);
-    if ("fallback" in decision) await next(req, res);
+    if ("fallback" in decision) {
+      await next(req, res);
+      return;
+    }
+    const url = new URL(req.url ?? "/", "http://localhost");
+    await compiled.get(decision.route)?.handle(
+      req,
+      res,
+      {
+        params: decision.params,
+        pathname: url.pathname,
+        search: url.search,
+        query: decision.query,
+      },
+      next,
+    );
   }
 
   return { handle, decide };
+}
+
+/**
+ * What `resolveRoutes` decided for a page load: the compiled route tsx2rs serves, with the params
+ * and query Next.js gives its page, or why Next.js serves it.
+ */
+export function decision(
+  resolved: ResolveRoutesResult,
+  compiled: ReadonlyMap<string, unknown>,
+): Decision {
+  if (resolved.resolvedPathname === undefined) return { fallback: "no route" };
+  if (!compiled.has(resolved.resolvedPathname)) {
+    return { fallback: `${resolved.resolvedPathname} isn't compiled` };
+  }
+  if (
+    resolved.redirect ||
+    resolved.externalRewrite ||
+    resolved.resolvedHeaders?.keys().next().done === false
+  ) {
+    return { fallback: "routing rules apply (redirect, rewrite or headers)" };
+  }
+  // Next.js names dynamic params `nxtP<name>` in route matches (with the undecoded value the page
+  // gets) and in the query (decoded), next to regex groups; `nxtI` marks interception routes.
+  const params: Record<string, string> = {};
+  for (const [key, value] of Object.entries(resolved.routeMatches ?? {})) {
+    if (key.startsWith(PARAM)) params[key.slice(PARAM.length)] = value;
+  }
+  const query = Object.fromEntries(
+    Object.entries(resolved.invocationTarget?.query ?? {}).filter(
+      ([key]) => !key.startsWith(PARAM) && !key.startsWith(INTERCEPTION),
+    ),
+  );
+  return { route: resolved.resolvedPathname, params, query };
 }
 
 /** Starts the server for the app in `dir`. */

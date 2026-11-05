@@ -115,6 +115,9 @@ importers:
       '@next/routing':
         specifier: 16.4.3
         version: 16.4.3
+      '@tsx2rs/native':
+        specifier: workspace:*
+        version: link:../native
     devDependencies:
       '@types/react':
         specifier: 'catalog:'

@@ -16,6 +16,6 @@ What a compiled route runs at request time. Today that's encoding, capturing Nex
 
   It is tested byte for byte on real Next.js 16.4.3 documents (`test/next/`).
 
-- **`@tsx2rs/runtime/server`** ([ADR-0019](../../docs/adr/0019-runtime-server.md)): `start({ dir, port })` serves an app built with `@tsx2rs/adapter`. A request tsx2rs doesn't serve goes to Next.js's own request handler, so it is `next start`'s answer, byte for byte. `pnpm test:runtime` checks that against `next start` on a real build.
+- **`@tsx2rs/runtime/server`** ([ADR-0019](../../docs/adr/0019-runtime-server.md)): `start({ dir, port })` serves an app built with `@tsx2rs/adapter`. A request tsx2rs doesn't serve goes to Next.js's own request handler, so it is `next start`'s answer, byte for byte. A compiled route learns Next.js's wrapper from Next.js's own responses, confirms it with a second response for other params, then serves its pages itself, byte for byte (`x-tsx2rs: compiled`); a route it can't render natively yet is refused, with the reason, and stays Next.js's. `pnpm test:runtime` checks that against `next start` on a real build.
 
 Tested with `pnpm test` (unit tests, byte for byte) and end to end by the component fixtures in [`tests/differential`](../../tests/differential/README.md), which run every generated encoder against a reference and the engine's output against React.
