@@ -11,4 +11,4 @@ A copy of [vercel/commerce](https://github.com/vercel/commerce) (commit `f7521d5
 
 **Not changed:** every other page, layout and component. The upstream README is kept as [`README.upstream.md`](README.upstream.md). `fonts/Inter-Bold.ttf` comes from upstream (used by the Open Graph image routes; Inter is under the SIL Open Font License).
 
-This folder is third-party code: the repository's ESLint and Prettier skip it. It isn't a pnpm workspace package yet; the steps that build and run it add that.
+This folder is third-party code: the repository's ESLint and Prettier skip it. It's a pnpm workspace package (`@tsx2rs/app-commerce`), and its `next.config.ts` has one more line: `adapterPath`, which builds it with `@tsx2rs/adapter` (milestone 1's one allowed change).
