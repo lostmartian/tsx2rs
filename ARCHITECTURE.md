@@ -62,7 +62,7 @@ Runs template programs.
 - **Input is untrusted:** it is checked as it is read (lengths, tags, UTF-8, nesting depth, leftover bytes), and failures are typed errors, never panics.
 
 ### `crates/napi`
-The only bridge to Node.js (napi-rs), published as `@tsx2rs/native`. Thin: converts arguments, calls `compiler`/`engine`, maps errors. No logic. It exports `compileApp` (the adapter's build, ADR-0017); rendering comes with the runtime. This is the only crate allowed `unsafe` (FFI), and it catches panics at the boundary.
+The only bridge to Node.js (napi-rs), published as `@tsx2rs/native`. Thin: converts arguments, calls `compiler`/`engine`, maps errors. No logic. It exports `compileApp` (the adapter's build, ADR-0017) and `Program` (a template program decoded once, rendered per request into HTML, Flight, `<head>` content and hint rows). This is the only crate allowed `unsafe` (FFI), and it catches panics at the boundary.
 
 ### `packages/adapter`
 `@tsx2rs/adapter`: the Next.js Deployment Adapter ([ADR-0017](docs/adr/0017-adapter-build.md)), set as `adapterPath`.

@@ -4,5 +4,5 @@
  * This module is the package's whole public API; the generated loader in `binding/` is an
  * implementation detail.
  */
-export { compileApp, programFormatVersion, version } from "../binding/index.js";
-export type { App, DataFunction, Route } from "../binding/index.js";
+export { compileApp, Program, programFormatVersion, version } from "../binding/index.js";
+export type { App, DataFunction, Rendered, Route } from "../binding/index.js";
