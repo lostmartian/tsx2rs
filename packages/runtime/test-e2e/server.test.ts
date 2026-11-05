@@ -112,3 +112,59 @@ describe("the tsx2rs server, for what it doesn't compile", () => {
     expect(ours.status).toBe(307);
   });
 });
+
+describe("the tsx2rs server, for a compiled route", () => {
+  /** A response's headers, without those of its transfer (and tsx2rs's marker). */
+  const headers = async (base: string, path: string) => {
+    const res = await fetch(base + path);
+    const out: Record<string, string> = {};
+    res.headers.forEach((value, name) => {
+      if (
+        ![
+          "date",
+          "connection",
+          "keep-alive",
+          "transfer-encoding",
+          "content-length",
+          "x-tsx2rs",
+        ].includes(name)
+      ) {
+        out[name] = value;
+      }
+    });
+    return { headers: out, compiled: res.headers.get("x-tsx2rs"), body: await res.text() };
+  };
+  const state = async () =>
+    (await (await fetch(`${oursUrl}/__tsx2rs`)).json()) as Record<
+      string,
+      { state: string; reason?: string }
+    >;
+
+  it("learns Next.js's wrapper, confirms it, then serves the page itself, byte for byte", async () => {
+    // Earlier requests (`/q/3`) taught it the wrapper; one with other params confirms it.
+    await both("/q/7");
+    expect((await state())["/q/[n]"]).toEqual({ state: "served" });
+    for (const path of ["/q/12345678901234567890", "/q/a%20b%26c", "/q/9?x=1&y=%3Cb%3E", "/q/3"]) {
+      const [n, ours] = [await headers(nextUrl, path), await headers(oursUrl, path)];
+      expect(ours.compiled).toBe("compiled");
+      expect(ours.body).toBe(n.body);
+      expect(ours.headers).toEqual(n.headers);
+    }
+  });
+
+  it("answers HEAD for a served page with the page's headers and no body", async () => {
+    const res = await fetch(`${oursUrl}/q/4`, { method: "HEAD" });
+    expect(res.headers.get("x-tsx2rs")).toBe("compiled");
+    expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(await res.text()).toBe("");
+  });
+
+  it("refuses a page it can't render natively yet, and Next.js keeps serving it", async () => {
+    const { next, ours } = await both("/p/5");
+    expect(ours).toEqual(next);
+    expect((await state())["/p/[n]"]).toEqual({
+      state: "refused",
+      reason: "tsx2rs can't render it: a component element, rendered by React for now",
+    });
+  });
+});

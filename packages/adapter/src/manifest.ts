@@ -54,6 +54,8 @@ export interface NextBuild {
   images: unknown;
   /** `config.generateEtags`: whether static files get ETags. */
   generateEtags: boolean;
+  /** `config.compress`: whether responses are compressed. */
+  compress: boolean;
 }
 
 /** One of Next.js's build outputs. */

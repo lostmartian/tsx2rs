@@ -113,6 +113,7 @@ const adapter: NextAdapter = {
       outputs: nextOutputs(outputs, projectDir),
       images: config.images,
       generateEtags: config.generateEtags,
+      compress: config.compress,
     };
     const manifest = writeManifest(join(distDir, "tsx2rs"), projectDir, saved, outputs.appPages, {
       nextVersion,

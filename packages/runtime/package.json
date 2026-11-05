@@ -24,7 +24,8 @@
     "react": "catalog:"
   },
   "dependencies": {
-    "@next/routing": "16.4.3"
+    "@next/routing": "16.4.3",
+    "@tsx2rs/native": "workspace:*"
   },
   "peerDependencies": {
     "next": "16.4.3"
