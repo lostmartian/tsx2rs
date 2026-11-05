@@ -114,6 +114,8 @@ const adapter: NextAdapter = {
       images: config.images,
       generateEtags: config.generateEtags,
       compress: config.compress,
+      // Next.js normalizes the app's `RegExp` (or its default) to the pattern's source string.
+      htmlLimitedBots: config.htmlLimitedBots,
     };
     const manifest = writeManifest(join(distDir, "tsx2rs"), projectDir, saved, outputs.appPages, {
       nextVersion,

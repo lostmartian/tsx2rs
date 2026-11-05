@@ -33,6 +33,8 @@ export interface Manifest {
     routing: ResolveRoutesParams["routes"];
     outputs: { type: string; id: string; pathname: string; file: string | null; parent?: string }[];
     compress: boolean;
+    /** `config.htmlLimitedBots`: the app's own pattern for bots that get blocking metadata. */
+    htmlLimitedBots: string | null;
   };
   routes: (Partial<CompiledRoute> & { page: string; pathnames: string[]; compiled: boolean })[];
 }
@@ -110,6 +112,13 @@ export async function createHandler(options: Options): Promise<{
       if (!pathname.endsWith(".rsc")) compiled.set(pathname, route);
   }
 
+  const { getBotType } = app("next/dist/shared/lib/router/utils/is-bot.js") as {
+    getBotType: BotType;
+  };
+  const htmlLimitedBots = build.htmlLimitedBots
+    ? new RegExp(build.htmlLimitedBots, "i")
+    : undefined;
+
   const createNext = app("next") as CreateNext;
   const nextApp = createNext({ dir, dev: false, quiet: true });
   await nextApp.prepare();
@@ -140,8 +149,9 @@ export async function createHandler(options: Options): Promise<{
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (options.status && req.url === "/__tsx2rs") {
-      const states: Record<string, RouteState> = {};
-      for (const [pathname, route] of compiled) states[pathname] = route.state;
+      const states: Record<string, RouteState & { variants?: Record<string, RouteState> }> = {};
+      for (const [pathname, route] of compiled)
+        states[pathname] = { ...route.state, variants: route.states };
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(states));
       return;
     }
@@ -155,6 +165,7 @@ export async function createHandler(options: Options): Promise<{
       req,
       res,
       {
+        variant: variant(req.headers, getBotType, htmlLimitedBots),
         params: decision.params,
         pathname: url.pathname,
         search: url.search,
@@ -198,6 +209,31 @@ export function decision(
     ),
   );
   return { route: resolved.resolvedPathname, params, query };
+}
+
+/** Next.js's `getBotType`: `"dom"`, `"html"` or `undefined` for a user agent. */
+export type BotType = (userAgent: string) => string | undefined;
+
+/**
+ * A request's variant (ADR-0018): what Next.js's wrapper may depend on besides the URL and
+ * params. The names of the cookies sent (a layout reading a cart cookie renders differently),
+ * and the kind of client by Next.js's own bot rules (bots get blocking metadata).
+ */
+export function variant(
+  headers: IncomingMessage["headers"],
+  getBotType: BotType,
+  htmlLimitedBots?: RegExp,
+): string {
+  const cookies = (headers.cookie ?? "")
+    .split(";")
+    .map((c) => c.split("=")[0]?.trim() ?? "")
+    .filter((name) => name !== "")
+    .sort();
+  const ua = headers["user-agent"] ?? "";
+  const bot = (htmlLimitedBots?.test(ua) ? "html" : getBotType(ua)) ?? "";
+  return cookies.length === 0 && bot === ""
+    ? ""
+    : JSON.stringify({ cookies: [...new Set(cookies)], bot });
 }
 
 /** Starts the server for the app in `dir`. */
