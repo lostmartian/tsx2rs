@@ -51,6 +51,8 @@ export type RouteState =
 
 /** What a request asks a compiled route for. */
 export interface Request {
+  /** Its variant: what else Next.js's wrapper may depend on (`variant` in `server.ts`). */
+  variant?: string;
   params: Record<string, string>;
   pathname: string;
   search: string;
@@ -75,90 +77,28 @@ const TRANSFER = new Set([
 /** The registry the adapter's loader fills (ADR-0017). */
 const REGISTRY = Symbol.for("tsx2rs.data");
 
-/** A compiled route: what it needs to run, loaded once, and what it has learned. */
-export class Route {
-  readonly route: CompiledRoute;
-  private status: RouteState = { state: "learning" };
-  private template: Template | undefined;
-  private head: Head | undefined;
-  private readonly render: Renderer;
-  /** Next.js's `compression` middleware, as `next start` applies it (unless `compress: false`). */
-  private readonly compress: Compress | undefined;
+/**
+ * What a route has learned for one **variant** of its requests: requests that differ in what
+ * Next.js's wrapper may depend on besides params and the URL (which cookies are set, whether the
+ * client is a bot). Each variant learns, confirms and is refused on its own, so a visitor with a
+ * cart doesn't stop tsx2rs serving visitors without one.
+ */
+class Variant {
+  status: RouteState = { state: "learning" };
+  template: Template | undefined;
+  head: Head | undefined;
 
-  constructor(route: CompiledRoute, render: Renderer, compress?: Compress) {
-    this.route = route;
-    this.render = render;
-    this.compress = compress;
-  }
-
-  get state(): RouteState {
-    return this.status;
-  }
-
-  /** Serves `request`, or hands it to `next` (and learns from Next.js's response). */
-  async handle(
-    req: IncomingMessage,
-    res: ServerResponse,
-    request: Request,
-    next: (req: IncomingMessage, res: ServerResponse) => Promise<void>,
-  ): Promise<void> {
-    if (this.status.state === "refused") {
-      await next(req, res);
-      return;
-    }
-    const fragments = await this.render(request).catch((error: unknown) => {
-      this.refuse(
-        `tsx2rs can't render it: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return undefined;
-    });
-    if (fragments === undefined) {
-      await next(req, res);
-      return;
-    }
-    const values = {
-      params: request.params,
-      pathname: request.pathname,
-      search: request.search,
-      fragments: Object.fromEntries(fragments.map((f) => [f.name, f])),
-    };
-    if (this.template && this.head && this.canFill(request.params)) {
-      const body = fill(this.template, values);
-      if (this.compress) {
-        this.compress(req, res, () => undefined);
-        // On a client disconnect the middleware never ends its zlib stream (Next.js's
-        // `releaseCompressionStream`).
-        res.once("close", () => {
-          if (!res.writableFinished) release(res);
-        });
-      }
-      res.writeHead(this.head.status, { ...this.head.headers, "x-tsx2rs": "compiled" });
-      res.end(req.method === "HEAD" ? undefined : body);
-      return;
-    }
-    // The copy is the document only uncompressed: this one response isn't compressed.
-    delete req.headers["accept-encoding"];
-    await tee(req, res, next, (response) => {
-      const type = response.headers["content-type"];
-      const html = typeof type === "string" && type.startsWith("text/html");
-      if (response.status === 200 && html)
-        this.study({ document: response.body, ...values, fragments }, response);
-    });
-  }
-
-  private canFill(params: Record<string, string>): boolean {
-    if (this.status.state === "served") return true;
+  canFill(params: Record<string, string>): boolean {
+    const status = this.status;
+    if (status.state === "served") return true;
     return (
-      this.status.state === "learned" &&
-      Object.entries(params).every(
-        ([name, value]) =>
-          (this.status as { params: Record<string, string> }).params[name] === value,
-      )
+      status.state === "learned" &&
+      Object.entries(params).every(([name, value]) => status.params[name] === value)
     );
   }
 
   /** Learns from, or confirms with, a response Next.js served. */
-  private study(sample: Parameters<typeof learn>[0], response: Head): void {
+  study(sample: Parameters<typeof learn>[0], response: Head): void {
     if (!this.template) {
       const learned = learn(sample);
       if (!learned.ok) {
@@ -183,9 +123,95 @@ export class Route {
     if (confirmed(result.template)) this.status = { state: "served" };
   }
 
-  private refuse(reason: string): void {
+  refuse(reason: string): void {
     this.status = { state: "refused", reason };
     this.template = undefined;
+  }
+}
+
+/** A compiled route: what it needs to run, and what each variant of its requests has learned. */
+export class Route {
+  readonly route: CompiledRoute;
+  /** Set when tsx2rs can't render the route at all: every variant is Next.js's. */
+  private refused: string | undefined;
+  private readonly variants = new Map<string, Variant>();
+  private readonly render: Renderer;
+  /** Next.js's `compression` middleware, as `next start` applies it (unless `compress: false`). */
+  private readonly compress: Compress | undefined;
+
+  constructor(route: CompiledRoute, render: Renderer, compress?: Compress) {
+    this.route = route;
+    this.render = render;
+    this.compress = compress;
+  }
+
+  /** The state of the default variant (requests without cookies, not from a bot), or the
+   * route's refusal. */
+  get state(): RouteState {
+    if (this.refused !== undefined) return { state: "refused", reason: this.refused };
+    return this.variants.get("")?.status ?? { state: "learning" };
+  }
+
+  /** Every variant's state, by variant key. */
+  get states(): Record<string, RouteState> {
+    const out: Record<string, RouteState> = {};
+    for (const [key, variant] of this.variants) out[key] = variant.status;
+    return out;
+  }
+
+  /** Serves `request`, or hands it to `next` (and learns from Next.js's response). */
+  async handle(
+    req: IncomingMessage,
+    res: ServerResponse,
+    request: Request,
+    next: (req: IncomingMessage, res: ServerResponse) => Promise<void>,
+  ): Promise<void> {
+    let variant = this.variants.get(request.variant ?? "");
+    if (!variant) {
+      variant = new Variant();
+      this.variants.set(request.variant ?? "", variant);
+    }
+    if (this.refused !== undefined || variant.status.state === "refused") {
+      await next(req, res);
+      return;
+    }
+    const fragments = await this.render(request).catch((error: unknown) => {
+      this.refused = `tsx2rs can't render it: ${error instanceof Error ? error.message : String(error)}`;
+      return undefined;
+    });
+    if (fragments === undefined) {
+      await next(req, res);
+      return;
+    }
+    const values = {
+      params: request.params,
+      pathname: request.pathname,
+      search: request.search,
+      fragments: Object.fromEntries(fragments.map((f) => [f.name, f])),
+    };
+    if (variant.template && variant.head && variant.canFill(request.params)) {
+      const body = fill(variant.template, values);
+      if (this.compress) {
+        this.compress(req, res, () => undefined);
+        // On a client disconnect the middleware never ends its zlib stream (Next.js's
+        // `releaseCompressionStream`).
+        res.once("close", () => {
+          if (!res.writableFinished) release(res);
+        });
+      }
+      res.writeHead(variant.head.status, { ...variant.head.headers, "x-tsx2rs": "compiled" });
+      res.end(req.method === "HEAD" ? undefined : body);
+      return;
+    }
+    // The copy is the document only uncompressed: this one response isn't compressed.
+    delete req.headers["accept-encoding"];
+    const learning = variant;
+    await tee(req, res, next, (response) => {
+      const type = response.headers["content-type"];
+      const html = typeof type === "string" && type.startsWith("text/html");
+      if (response.status === 200 && html)
+        learning.study({ document: response.body, ...values, fragments }, response);
+    });
   }
 }
 

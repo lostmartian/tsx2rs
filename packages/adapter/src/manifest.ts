@@ -56,6 +56,9 @@ export interface NextBuild {
   generateEtags: boolean;
   /** `config.compress`: whether responses are compressed. */
   compress: boolean;
+  /** `config.htmlLimitedBots`: the bot pattern (the app's, or Next.js's default) as a regular
+   * expression's source. */
+  htmlLimitedBots: string | null;
 }
 
 /** One of Next.js's build outputs. */

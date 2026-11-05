@@ -192,6 +192,7 @@ describe("report", () => {
         images: {},
         generateEtags: true,
         compress: true,
+        htmlLimitedBots: null,
       },
       routes: [
         { page: "a", pathnames: [], entrypoint: null, compiled: true, reasons: [] },

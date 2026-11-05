@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createGzip } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Route, type CompiledRoute, type Renderer, type Compress } from "../src/compiled.js";
-import { decision } from "../src/server.js";
+import { decision, variant } from "../src/server.js";
 
 /** Real Next.js 16.4.3 documents for `app/q/[n]/page.tsx` (see test/next/README.md). */
 const files = [
@@ -291,5 +291,76 @@ describe("decision", () => {
         compiled,
       ),
     ).toEqual({ fallback: "routing rules apply (redirect, rewrite or headers)" });
+  });
+});
+
+describe("variants", () => {
+  const bots = (ua: string) =>
+    ua.includes("Googlebot") ? "dom" : ua.includes("Twitterbot") ? "html" : undefined;
+
+  it("key requests by the cookies they send and the kind of bot, nothing else", () => {
+    expect(variant({}, bots)).toBe("");
+    expect(variant({ "user-agent": "Mozilla/5.0" }, bots)).toBe("");
+    expect(variant({ cookie: "b=2; a=1; b=3" }, bots)).toBe('{"cookies":["a","b"],"bot":""}');
+    expect(variant({ "user-agent": "Googlebot/2.1" }, bots)).toBe('{"cookies":[],"bot":"dom"}');
+    // The app's own `htmlLimitedBots` pattern wins.
+    expect(variant({ "user-agent": "MyCrawler" }, bots, /MyCrawler/i)).toBe(
+      '{"cookies":[],"bot":"html"}',
+    );
+  });
+
+  it("learn and refuse one at a time: a refused variant leaves the others served", async () => {
+    // A cart's content depends on the visitor, not on the params.
+    let carts = 0;
+    const route = new Route(definition, page);
+    const server = createServer((req, res) => {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const n = url.pathname.split("/")[2] ?? "";
+      const cart = (req.headers.cookie ?? "").includes("cart");
+      const vary = cart ? '{"cookies":["cart"],"bot":""}' : "";
+      // Next.js, for a visitor with a cart: the layout shows it, so the wrapper isn't the same.
+      const nextFor = async (r: IncomingMessage, s: ServerResponse) => {
+        if (!cart) {
+          await next(r, s);
+          return;
+        }
+        s.writeHead(200, HEADERS).end(
+          (docs[n] ?? "").replace(
+            "<body>",
+            `<body><span>${String(++carts)} items in the cart</span>`,
+          ),
+        );
+      };
+      void route.handle(
+        req,
+        res,
+        { variant: vary, params: { n }, pathname: url.pathname, search: "", query: {} },
+        nextFor,
+      );
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const a = server.address();
+    const url = `http://127.0.0.1:${String(typeof a === "object" && a ? a.port : 0)}`;
+    const get = async (path: string, cookie?: string) => {
+      const res = await fetch(url + path, cookie ? { headers: { cookie } } : {});
+      await res.text();
+      return res.headers.get("x-tsx2rs");
+    };
+    await get("/q/3");
+    await get("/q/7");
+    await get("/q/3", "cart=1");
+    await get("/q/7", "cart=1");
+    expect(route.states).toEqual({
+      "": { state: "served" },
+      '{"cookies":["cart"],"bot":""}': {
+        state: "refused",
+        reason: expect.stringContaining(
+          "differs in ways the params and fragments don't explain",
+        ) as string,
+      },
+    });
+    expect(await get("/q/1234567890123456789012345678901234567890")).toBe("compiled");
+    expect(await get("/q/3", "cart=1")).toBeNull();
+    server.close();
   });
 });

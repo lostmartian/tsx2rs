@@ -143,7 +143,7 @@ describe("the tsx2rs server, for a compiled route", () => {
   it("learns Next.js's wrapper, confirms it, then serves the page itself, byte for byte", async () => {
     // Earlier requests (`/q/3`) taught it the wrapper; one with other params confirms it.
     await both("/q/7");
-    expect((await state())["/q/[n]"]).toEqual({ state: "served" });
+    expect((await state())["/q/[n]"]).toMatchObject({ state: "served" });
     for (const path of ["/q/12345678901234567890", "/q/a%20b%26c", "/q/9?x=1&y=%3Cb%3E", "/q/3"]) {
       const [n, ours] = [await headers(nextUrl, path), await headers(oursUrl, path)];
       expect(ours.compiled).toBe("compiled");
@@ -162,7 +162,7 @@ describe("the tsx2rs server, for a compiled route", () => {
   it("refuses a page it can't render natively yet, and Next.js keeps serving it", async () => {
     const { next, ours } = await both("/p/5");
     expect(ours).toEqual(next);
-    expect((await state())["/p/[n]"]).toEqual({
+    expect((await state())["/p/[n]"]).toMatchObject({
       state: "refused",
       reason: "tsx2rs can't render it: a component element, rendered by React for now",
     });
