@@ -8,3 +8,5 @@ packages/native/binding/
 next-env.d.ts
 # Vendored third-party test apps
 tests/apps/
+# Real Next.js responses: byte-exact test data
+packages/runtime/test/next/

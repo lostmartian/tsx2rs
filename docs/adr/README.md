@@ -23,5 +23,6 @@ Format: [MADR](https://adr.github.io/madr/)-style. Context → Decision → Cons
 | [0015](0015-component-fixtures.md) | Component fixtures run the whole compiler pipeline, and what they changed in records | Accepted |
 | [0016](0016-generated-encoder.md) | The generated encoder: straight-line code per template, on a small runtime library | Accepted |
 | [0017](0017-adapter-build.md) | The adapter's build: compile before bundling, data functions in Next.js's own bundle | Accepted |
+| [0018](0018-capturing-the-wrapper.md) | Next.js's wrapper is captured from real responses, then confirmed | Accepted |
 
 Background research (benchmarks, spikes, the full decision history before this repository existed) lives in the separate `tsx2rs-lab` repository.
