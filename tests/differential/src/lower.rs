@@ -6,7 +6,7 @@
 use crate::tree::{Element, Link, Tree, Value, json_string};
 use tsx2rs_ir::attribute::{ElementRules, Prop, classify, is_custom_element};
 use tsx2rs_ir::input::{InputWriter, tag};
-use tsx2rs_ir::{ChunkId, FormatError, Op, Program, TemplateId};
+use tsx2rs_ir::{ChunkId, FormatError, MarkKind, Op, Program, TemplateId};
 
 /// A tree's program and the input that renders it.
 #[derive(Debug)]
@@ -139,6 +139,10 @@ impl Lowering {
             }
             Tree::Element(e) => self.element(e),
             Tree::Component(inner, Link::Call) => {
+                // React checks whether to defer a component's output where it starts.
+                self.op(Op::Mark {
+                    kind: MarkKind::Component,
+                });
                 let at = self.templates[self.current].len();
                 self.op(Op::Child); // placeholder: the call goes here, before its template's ops
                 let template = self.template(inner);

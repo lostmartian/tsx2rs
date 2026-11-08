@@ -3,7 +3,7 @@ source: crates/compiler/tests/encoder.rs
 expression: encoder.source
 ---
 // tsx2rs encoder (generated): writes the records as the engine's input (ADR-0016).
-import { ENTRY_KEYS, NO_KEYS, Input, attrs, boundary, call, html, island, node, primitive, reference, rootKey, style, value } from "@tsx2rs/runtime/encode";
+import { ENTRY_KEYS, NO_KEYS, Input, attrs, boundary, call, callAsync, html, island, node, primitive, reference, rootKey, style, value } from "@tsx2rs/runtime/encode";
 
 export function encode(record, data, islands, boundaries) {
   const w = new Input();

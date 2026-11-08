@@ -12,7 +12,7 @@ pub mod input;
 mod program;
 
 pub use format::MAGIC;
-pub use program::{ChunkId, Op, OpIndex, Program, TemplateId};
+pub use program::{ChunkId, MarkKind, Op, OpIndex, Program, TemplateId};
 
 /// Version of the template-program format written by the compiler and read by the engine.
 ///

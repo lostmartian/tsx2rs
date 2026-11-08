@@ -30,26 +30,35 @@ pub struct Encoder {
 /// The encoder for a lowered page: `record` is its data function's record.
 #[must_use]
 pub fn generate(lowered: &Lowered) -> Encoder {
+    let templates = || std::iter::once(&lowered.record).chain(&lowered.templates);
+    // With an async component, the encoder awaits its data function, and so is async throughout.
+    let asynchronous = templates().any(|record| any_async(record));
+    let (fn_, await_) = if asynchronous {
+        ("async function", "await ")
+    } else {
+        ("function", "")
+    };
     let mut g = Generator {
         out: String::new(),
         callees: Vec::new(),
         islands: Vec::new(),
         next: 0,
         depth: 1,
+        asynchronous,
     };
-    g.out.push_str(
+    let _ = write!(
+        g.out,
         "// tsx2rs encoder (generated): writes the records as the engine's input (ADR-0016).\n\
-         import { ENTRY_KEYS, NO_KEYS, Input, attrs, boundary, call, html, island, node, \
-         primitive, reference, rootKey, style, value } from \"@tsx2rs/runtime/encode\";\n\n\
-         export function encode(record, data, islands, boundaries) {\n  \
+         import {{ ENTRY_KEYS, NO_KEYS, Input, attrs, boundary, call, callAsync, html, island, \
+         node, primitive, reference, rootKey, style, value }} from \"@tsx2rs/runtime/encode\";\n\n\
+         export {fn_} encode(record, data, islands, boundaries) {{\n  \
          const w = new Input();\n  \
-         t0(w, record, ENTRY_KEYS, data, islands, boundaries);\n  return w.finish();\n}\n",
+         {await_}t0(w, record, ENTRY_KEYS, data, islands, boundaries);\n  return w.finish();\n}}\n",
     );
-    let templates = std::iter::once(&lowered.record).chain(&lowered.templates);
-    for (i, record) in templates.enumerate() {
+    for (i, record) in templates().enumerate() {
         let _ = write!(
             g.out,
-            "\nfunction t{i}(w, r, k, data, islands, boundaries) {{\n"
+            "\n{fn_} t{i}(w, r, k, data, islands, boundaries) {{\n"
         );
         g.record(record, "r", 0, "k", true);
         g.out.push_str("}\n");
@@ -69,6 +78,8 @@ struct Generator {
     next: usize,
     /// Indentation.
     depth: usize,
+    /// Whether the encoder is async: calls are awaited.
+    asynchronous: bool,
 }
 
 impl Generator {
@@ -187,32 +198,12 @@ impl Generator {
                 component,
                 body,
                 ..
-            } => {
-                let callee = (*module, *component);
-                let index = self
-                    .callees
-                    .iter()
-                    .position(|c| *c == callee)
-                    .unwrap_or_else(|| {
-                        self.callees.push(callee);
-                        self.callees.len() - 1
-                    });
-                let outer = if root { keys } else { "NO_KEYS" };
-                match body {
-                    Body::Template(t) => self.line(&format!(
-                        "call(w, {outer}, {v}, data[{index}], (w, r, k) => t{t}(w, r, k, data, islands, boundaries));"
-                    )),
-                    Body::Inline(record) => {
-                        self.block(
-                            &format!("call(w, {outer}, {v}, data[{index}], (w, r, k) => {{"),
-                            |g| g.record(record, "r", 0, "k", true),
-                        );
-                        // `block` closed the arrow function's body; close the call.
-                        self.out.truncate(self.out.trim_end().len());
-                        self.out.push_str(");\n");
-                    }
-                }
-            }
+            } => self.call(
+                (*module, *component),
+                body,
+                v,
+                if root { keys } else { "NO_KEYS" },
+            ),
             // The callee places the slot's record, built by the caller.
             Slot::Placed { record, .. } => self.record(record, v, 0, "NO_KEYS", false),
             Slot::RootWrap => {} // handled by `record`
@@ -227,6 +218,38 @@ impl Generator {
             Slot::Suspense {
                 fallback, record, ..
             } => self.suspense(fallback.as_deref(), record, v),
+        }
+    }
+
+    /// A linked component's pending call: its data function from `data`, its record written with
+    /// its body, inline or its template; awaited in an async encoder (ADR-0025).
+    fn call(&mut self, callee: (ModuleId, usize), body: &Body, v: &str, outer: &str) {
+        let index = self
+            .callees
+            .iter()
+            .position(|c| *c == callee)
+            .unwrap_or_else(|| {
+                self.callees.push(callee);
+                self.callees.len() - 1
+            });
+        let (call, arrow) = if self.asynchronous {
+            ("await callAsync", "async ")
+        } else {
+            ("call", "")
+        };
+        match body {
+            Body::Template(t) => self.line(&format!(
+                "{call}(w, {outer}, {v}, data[{index}], (w, r, k) => t{t}(w, r, k, data, islands, boundaries));"
+            )),
+            Body::Inline(record) => {
+                self.block(
+                    &format!("{call}(w, {outer}, {v}, data[{index}], {arrow}(w, r, k) => {{"),
+                    |g| g.record(record, "r", 0, "k", true),
+                );
+                // `block` closed the arrow function's body; close the call.
+                self.out.truncate(self.out.trim_end().len());
+                self.out.push_str(");\n");
+            }
         }
     }
 
@@ -319,4 +342,32 @@ impl Generator {
             });
         }
     }
+}
+
+/// Whether a record has an async component's call, anywhere in it.
+fn any_async(record: &[Slot]) -> bool {
+    record.iter().any(|slot| match slot {
+        Slot::Call {
+            is_async,
+            body,
+            slots,
+            ..
+        } => {
+            *is_async
+                || matches!(body, Body::Inline(record) if any_async(record))
+                || slots.iter().any(|(_, record)| any_async(record))
+        }
+        Slot::Keyed { record, .. } | Slot::Placed { record, .. } | Slot::Island { record, .. } => {
+            any_async(record)
+        }
+        Slot::Suspense {
+            fallback, record, ..
+        } => fallback.as_deref().is_some_and(any_async) || any_async(record),
+        Slot::Branch {
+            then, otherwise, ..
+        } => any_async(then) || any_async(otherwise),
+        Slot::List { item, .. } => any_async(std::slice::from_ref(item)),
+        Slot::Returns(returns) => returns.iter().any(|(_, record)| any_async(record)),
+        Slot::Value { .. } | Slot::Props { .. } | Slot::RootWrap => false,
+    })
 }

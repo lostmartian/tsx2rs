@@ -292,7 +292,7 @@ export function Counter() { return null; }"#,
         links(&page.record),
         [
             "child",                  // a component that calls a hook: React renders it
-            "child", // async: its own Flight row (`$L1`), which comes with streaming
+            "call",  // async: linked, its output a Flight row of its own (ADR-0025)
             "child", // a parameter shadows the module's `Shadowed`
             "island app/counter.tsx", // a client component (ADR-0020)
             "child", // `children` used as a value, not only placed

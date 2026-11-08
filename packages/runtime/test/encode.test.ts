@@ -8,6 +8,7 @@ import {
   attrs,
   boundary,
   call,
+  callAsync,
   html,
   island,
   node,
@@ -340,6 +341,24 @@ describe("islands", () => {
         html(w, "<a>");
       }),
     ).toEqual([...str("<a>"), 0]);
+  });
+});
+
+describe("callAsync", () => {
+  it("awaits an async component's data function, then writes its record with its key path", async () => {
+    const seen: unknown[] = [];
+    const w = new Input();
+    await callAsync(
+      w,
+      NO_KEYS,
+      [{ id: 7 }, "k"],
+      (props) => Promise.resolve(["record", props]),
+      (_w, record, keys) => {
+        seen.push(record, keys);
+        return Promise.resolve();
+      },
+    );
+    expect(seen).toEqual([["record", { id: 7 }], { path: "k", implicit: false }]);
   });
 });
 

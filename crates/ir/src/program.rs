@@ -127,6 +127,22 @@ pub enum Op {
     HtmlOutput,
     /// Ends the innermost [`Op::HtmlOutput`].
     EndHtmlOutput,
+    /// Marks where the next Flight value starts: a server component's output (ADR-0025). Writes
+    /// nothing; the engine's outlining reads it.
+    Mark {
+        /// What starts there.
+        kind: MarkKind,
+    },
+}
+
+/// What an [`Op::Mark`] marks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MarkKind {
+    /// A server component's output: React checks whether to defer it to a row of its own here,
+    /// as it does at an element.
+    Component,
+    /// An async server component's output: always a row of its own.
+    Async,
 }
 
 impl Op {
@@ -140,6 +156,7 @@ impl Op {
                 | Self::Jump { .. }
                 | Self::Call { .. }
                 | Self::EndHtmlOutput
+                | Self::Mark { .. }
         )
     }
 }
@@ -338,7 +355,8 @@ fn validate(
             | Op::Child
             | Op::Island
             | Op::HtmlOutput
-            | Op::EndHtmlOutput => {}
+            | Op::EndHtmlOutput
+            | Op::Mark { .. } => {}
         }
     }
     if let Some(&(start, _)) = loops.last() {

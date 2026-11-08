@@ -364,6 +364,27 @@ export function call(
   data: DataFunction,
   body: Body,
 ): void {
+  const { props, keys } = callee(outer, pending);
+  body(w, data(props), keys);
+}
+
+/**
+ * {@link call} for an async server component (ADR-0025): its data function returns a promise, and
+ * the encoder that calls it is async.
+ */
+export async function callAsync(
+  w: Input,
+  outer: Keys,
+  pending: unknown,
+  data: (props: unknown) => unknown,
+  body: (w: Input, record: unknown, keys: Keys) => unknown,
+): Promise<void> {
+  const { props, keys } = callee(outer, pending);
+  await body(w, await data(props), keys);
+}
+
+/** A pending call's props and key path, as React's `jsx` takes them from its arguments. */
+function callee(outer: Keys, pending: unknown): { props: Record<string, unknown>; keys: Keys } {
   const [config, maybeKey] = pending as [Record<string, unknown>, unknown];
   let key = maybeKey === undefined ? null : keyString(maybeKey);
   const props: Record<string, unknown> = {};
@@ -376,5 +397,5 @@ export function call(
     key === null
       ? { path: outer.path, implicit: outer.path === null ? true : outer.implicit }
       : { path: outer.path === null ? key : `${outer.path},${key}`, implicit: outer.implicit };
-  body(w, data(props), keys);
+  return { props, keys };
 }

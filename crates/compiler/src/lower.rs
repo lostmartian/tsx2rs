@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use tsx2rs_engine::fold::{self, FoldError};
 use tsx2rs_ir::attribute::{ElementRules, Prop as Class, classify, is_custom_element};
 use tsx2rs_ir::input::{InputWriter, tag};
-use tsx2rs_ir::{ChunkId, FormatError, Op, OpIndex, Program, TemplateId};
+use tsx2rs_ir::{ChunkId, FormatError, MarkKind, Op, OpIndex, Program, TemplateId};
 
 use crate::graph::{Module, ModuleGraph, ModuleId};
 use crate::template::{
@@ -96,6 +96,9 @@ pub enum Slot {
         span: Range,
         /// Where the callee's template is.
         body: Body,
+        /// Whether the callee is an async component: its data function returns a promise, and
+        /// its output is a Flight row of its own (ADR-0025).
+        is_async: bool,
     },
     /// A hole where a callee places a slot: its value, written by the callee's data function, is
     /// the slot's record.
@@ -461,7 +464,7 @@ impl<'g> Link<'g> {
             _ => return None,
         };
         let component = &self.graph.modules[module.0].components[index];
-        if component.is_async || component.uses_hooks {
+        if component.uses_hooks {
             return None;
         }
         let slots = slots(element, component)?;
@@ -630,6 +633,15 @@ impl Lowering<'_> {
             return;
         };
         let mark = self.mark();
+        // Where React checks whether to defer the callee's output to a row of its own; an async
+        // component's output is always one (ADR-0025).
+        self.op(Op::Mark {
+            kind: if callee.component.is_async {
+                MarkKind::Async
+            } else {
+                MarkKind::Component
+            },
+        });
         let body = if callee.recursive {
             self.call(&callee)
         } else {
@@ -653,6 +665,7 @@ impl Lowering<'_> {
                 slots,
                 span: element.span,
                 body,
+                is_async: callee.component.is_async,
             });
         } else {
             // The callee can't be compiled (its own lowering reports why): React renders it.

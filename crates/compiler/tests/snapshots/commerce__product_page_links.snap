@@ -2,13 +2,13 @@
 source: crates/compiler/tests/commerce.rs
 expression: out
 ---
-app/product/[handle]/page.tsx ProductPage: 92 ops; links [suspense, island components/product/gallery.tsx, suspense, ProductDescription, Price, island components/product/variant-selector.tsx, Prose, island components/cart/add-to-cart.tsx]
-app/product/[handle]/page.tsx RelatedProducts: 81 ops; links [island next/link, GridTileImage, island next/image, Label, Price]
-components/grid/tile.tsx GridTileImage: 52 ops; links [island next/image, Label, Price]
-components/layout/footer.tsx Footer: 86 ops; links [island next/link, LogoSquare, LogoIcon, suspense, island components/layout/footer-menu.tsx]
-components/product/product-description.tsx ProductDescription: 40 ops; links [Price, island components/product/variant-selector.tsx, Prose, island components/cart/add-to-cart.tsx]
-components/label.tsx Label: 27 ops; links [Price]
-components/logo-square.tsx LogoSquare: 19 ops; links [LogoIcon]
+app/product/[handle]/page.tsx ProductPage: 267 ops; links [suspense, island components/product/gallery.tsx, suspense, ProductDescription, Price, island components/product/variant-selector.tsx, Prose, island components/cart/add-to-cart.tsx, RelatedProducts, island next/link, GridTileImage, island next/image, Label, Price, Footer, island next/link, LogoSquare, LogoIcon, suspense, island components/layout/footer-menu.tsx]
+app/product/[handle]/page.tsx RelatedProducts: 84 ops; links [island next/link, GridTileImage, island next/image, Label, Price]
+components/grid/tile.tsx GridTileImage: 54 ops; links [island next/image, Label, Price]
+components/layout/footer.tsx Footer: 88 ops; links [island next/link, LogoSquare, LogoIcon, suspense, island components/layout/footer-menu.tsx]
+components/product/product-description.tsx ProductDescription: 42 ops; links [Price, island components/product/variant-selector.tsx, Prose, island components/cart/add-to-cart.tsx]
+components/label.tsx Label: 28 ops; links [Price]
+components/logo-square.tsx LogoSquare: 20 ops; links [LogoIcon]
 components/price.tsx Price: 15 ops; links []
 components/prose.tsx Prose: 1 ops; links []
 components/icons/logo.tsx LogoIcon: 9 ops; links []
