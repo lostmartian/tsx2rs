@@ -194,9 +194,21 @@ export function learn(sample: Sample): Learned {
         : { kind: "flight", start: u.start, parts: [{ text: u.text }] },
     );
     for (const fragment of sample.fragments) {
-      place(units, "html", fragment.html, { fragment: fragment.name, as: "html" });
+      // A fragment may have only HTML (a page's segments, ADR-0024).
+      if (fragment.html !== "") {
+        place(units, "html", fragment.html, { fragment: fragment.name, as: "html" });
+      }
       // A row's value: after its `id:`, up to its newline.
-      place(units, "flight", fragment.flight, { fragment: fragment.name, as: "flight" }, ":", "\n");
+      if (fragment.flight !== "") {
+        place(
+          units,
+          "flight",
+          fragment.flight,
+          { fragment: fragment.name, as: "flight" },
+          ":",
+          "\n",
+        );
+      }
     }
     // The URL is in the router state twice (Next.js 16.4's initial payload, row 0).
     place(units, "flight", url("c", sample), { url: "c" });

@@ -98,6 +98,7 @@ describe.each([
       "app/m/[n]/page.tsx",
       "app/p/[n]/page.tsx",
       "app/q/[n]/page.tsx",
+      "app/s/[n]/page.tsx",
       "app/t/[n]/page.tsx",
     ]);
     // The page without client components encodes natively.
