@@ -2,7 +2,7 @@
   "name": "@tsx2rs/runtime",
   "version": "0.0.0",
   "private": true,
-  "description": "tsx2rs runtime: encoding records as the engine's input and capturing Next.js's wrapper (the HTTP server comes later)",
+  "description": "tsx2rs runtime: the server that serves an app's compiled routes and hands the rest to Next.js (tsx2rs start), and the encoder library",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -13,7 +13,8 @@
   "exports": {
     "./encode": "./src/encode.ts",
     "./capture": "./src/capture.ts",
-    "./server": "./src/server.ts"
+    "./server": "./src/server.ts",
+    "./cli": "./src/cli.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
@@ -29,5 +30,8 @@
   },
   "peerDependencies": {
     "next": "16.4.5"
+  },
+  "bin": {
+    "tsx2rs": "./src/cli.ts"
   }
 }
