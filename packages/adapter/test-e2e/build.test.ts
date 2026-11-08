@@ -77,7 +77,7 @@ describe.each([
   it("writes the manifest", () => {
     const m = manifest();
     expect(m.version).toBe(2);
-    expect(m.nextVersion).toBe("16.4.3");
+    expect(m.nextVersion).toBe("16.4.5");
     const page = m.routes.find((r) => r.page === "app/p/[n]/page.tsx");
     expect(page).toMatchObject({
       pathnames: ["/p/[n]", "/p/[n].rsc"],

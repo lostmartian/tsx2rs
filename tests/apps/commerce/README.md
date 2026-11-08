@@ -3,7 +3,7 @@
 A copy of [vercel/commerce](https://github.com/vercel/commerce) (commit `f7521d5`, MIT, see [`license.md`](license.md)), used as the end-to-end test app for milestone 1: the compiler must reproduce its product pages exactly (`/product/[handle]` and `/product-streaming/[handle]`).
 
 **Changed from upstream:**
-- **Next.js 16.4.3 / React 19.3.1:** `next.config.ts` drops the 15-canary experiments (`ppr`, `useCache`, `inlineCss`), which Next.js 16 renamed or removed.
+- **Next.js 16.4.5 / React 19.3.1:** `next.config.ts` drops the 15-canary experiments (`ppr`, `useCache`, `inlineCss`), which Next.js 16 renamed or removed.
 - **`lib/shopify/index.ts` and `lib/shopify/fixtures.ts`:** local test data instead of the Shopify Storefront API. Same exports and signatures, deterministic, no network, with an in-memory cart keyed by the `cartId` cookie. The data and descriptions are unchanged from the tsx2rs research measurements, so results stay comparable.
 - **Simulated latency per data call:** `LATENCY_<PRODUCT|RECOMMENDATIONS|MENU|CART>_MS`, default 0.
 - **`app/product-streaming/[handle]/page.tsx`:** the product page with `<RelatedProducts>` wrapped in `<Suspense>`, so its boundary streams when recommendations are slow.

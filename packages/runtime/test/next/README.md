@@ -1,6 +1,6 @@
 # Next.js documents
 
-Real responses from Next.js 16.4.3 (`next start`, Turbopack build) for the adapter's test pages `app/q/[n]/page.tsx` and `app/p/[n]/page.tsx` (`packages/adapter/test-e2e/app`), used by `capture.test.ts` (ADR-0018) and `islands.test.ts` (ADR-0020):
+Real responses from Next.js 16.4.5 (`next start`, Turbopack build) for the adapter's test pages `app/q/[n]/page.tsx` and `app/p/[n]/page.tsx` (`packages/adapter/test-e2e/app`), used by `capture.test.ts` (ADR-0018) and `islands.test.ts` (ADR-0020):
 
 | File | Request |
 |---|---|

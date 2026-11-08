@@ -43,7 +43,7 @@ describe("pages", () => {
 
 describe("the adapter", () => {
   const config = { distDir: ".next", turbopack: { rules: { "*.svg": { loaders: ["svg"] } } } };
-  const ctx = { phase: "phase-production-build" as const, nextVersion: "16.4.3", projectDir: root };
+  const ctx = { phase: "phase-production-build" as const, nextVersion: "16.4.5", projectDir: root };
 
   it("leaves the config alone outside production builds", async () => {
     const same = await adapter.modifyConfig?.(config as unknown as NextConfigComplete, {
@@ -115,7 +115,7 @@ describe("the adapter", () => {
       distDir,
       projectDir: root,
       buildId: "b1",
-      nextVersion: "16.4.3",
+      nextVersion: "16.4.5",
     } as unknown as Parameters<NonNullable<typeof adapter.onBuildComplete>>[0]);
     const manifest = JSON.parse(
       readFileSync(join(distDir, "tsx2rs/manifest.json"), "utf8"),
@@ -182,7 +182,7 @@ describe("report", () => {
   it("prints one line per route", () => {
     const manifest: Manifest = {
       version: MANIFEST_VERSION,
-      nextVersion: "16.4.3",
+      nextVersion: "16.4.5",
       buildId: "b",
       next: {
         basePath: "",

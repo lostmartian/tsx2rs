@@ -42,7 +42,7 @@ export interface Manifest {
 /** The manifest format this server reads. */
 export const MANIFEST_VERSION = 2;
 /** The Next.js version this runtime is built and tested against (ADR-0005, section 10). */
-export const NEXT_VERSION = "16.4.3";
+export const NEXT_VERSION = "16.4.5";
 
 type RequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 

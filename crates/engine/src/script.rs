@@ -1,7 +1,7 @@
 //! Embedding Flight in an HTML document: Next.js writes each Flight chunk as
 //! `<script>self.__next_f.push([1,"<chunk>"])</script>`, where `<chunk>` is
 //! `htmlEscapeJsonString(JSON.stringify(chunk))` without the quotes
-//! (`next/dist/esm/shared/lib/htmlescape.js`, 16.4.3).
+//! (`next/dist/esm/shared/lib/htmlescape.js`, 16.4.5).
 
 use crate::flight::json_string_body;
 

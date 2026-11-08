@@ -14,7 +14,7 @@ What a compiled route runs at request time. Today that's encoding, capturing Nex
   - `confirm` takes a response with different params: every byte must match, or the route is refused.
   - `fill` writes the document for a request.
 
-  It is tested byte for byte on real Next.js 16.4.3 documents (`test/next/`).
+  It is tested byte for byte on real Next.js 16.4.5 documents (`test/next/`).
 
 - **`@tsx2rs/runtime/server`** ([ADR-0019](../../docs/adr/0019-runtime-server.md)): `start({ dir, port })` serves an app built with `@tsx2rs/adapter`. A request tsx2rs doesn't serve goes to Next.js's own request handler, so it is `next start`'s answer, byte for byte. A compiled route learns Next.js's wrapper from Next.js's own responses, confirms it with a second response for other params, then serves its pages itself, byte for byte (`x-tsx2rs: compiled`); a route it can't render natively yet is refused, with the reason, and stays Next.js's. `pnpm test:runtime` checks that against `next start` on a real build.
 
