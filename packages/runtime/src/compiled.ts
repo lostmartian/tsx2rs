@@ -64,7 +64,8 @@ type Encode = (record: unknown, data: DataFunction[], islands?: Islands) => Uint
 export type RouteState =
   | { state: "learning" }
   | { state: "learned"; params: Record<string, string> }
-  | { state: "served" }
+  /** `perRequest`: each URL is served with the wrapper learned from its own response (ADR-0023). */
+  | { state: "served"; perRequest?: true }
   | { state: "refused"; reason: string };
 
 /** What a request asks a compiled route for. */
@@ -96,6 +97,9 @@ const TRANSFER = new Set([
   "keep-alive",
 ]);
 
+/** How many URLs' wrappers a variant keeps when they're per request (the oldest go first). */
+const REQUESTS = 1_000;
+
 /** The registry the adapter's loader fills (ADR-0017). */
 const REGISTRY = Symbol.for("tsx2rs.data");
 
@@ -115,6 +119,21 @@ class Variant {
    * the metadata in it (ADR-0022).
    */
   private first: { sample: Sample; metadata: Fragment } | undefined;
+  /** The URL the template was learned from (`Route.handle`'s request key). */
+  private learnedFrom = "";
+  /**
+   * Per-request wrappers (ADR-0023), by URL, once the wrapper turns out to depend on the request
+   * in ways the params and fragments don't explain (a layout that marks the current page's link).
+   */
+  private requests: Map<string, Template> | undefined;
+  /** Whether one URL's second response matched its first: then a URL's first is enough. */
+  private repeatable = false;
+
+  /** The template to fill for the request `url`, with `params`, if there is one. */
+  templateFor(url: string, params: Record<string, string>): Template | undefined {
+    if (this.requests) return this.repeatable ? this.requests.get(url) : undefined;
+    return this.template && this.canFill(params) ? this.template : undefined;
+  }
 
   canFill(params: Record<string, string>): boolean {
     const status = this.status;
@@ -130,11 +149,15 @@ class Variant {
    * stays part of the wrapper while the params explain it, so any request can be served; only a
    * wrapper that can't be confirmed otherwise takes it per request.
    */
-  study(sample: Sample, response: Head, metadata?: Fragment): void {
+  study(sample: Sample, response: Head, metadata: Fragment | undefined, url: string): void {
     const withMetadata = (s: Sample, m: Fragment): Sample => ({
       ...s,
       fragments: [...s.fragments, m],
     });
+    if (this.requests) {
+      this.studyRequest(sample, response, url);
+      return;
+    }
     if (!this.template) {
       const learned = learn(sample);
       if (!learned.ok) {
@@ -145,6 +168,7 @@ class Variant {
       this.head = { status: response.status, headers: response.headers };
       this.status = { state: "learned", params: sample.params };
       this.first = metadata && { sample, metadata };
+      this.learnedFrom = url;
       return;
     }
     if (JSON.stringify(response.headers) !== JSON.stringify(this.head?.headers)) {
@@ -164,6 +188,18 @@ class Variant {
       }
     }
     if (!result.ok) {
+      // The wrapper depends on the request: each URL keeps its own (ADR-0023).
+      const own = learn(sample);
+      if (own.ok) {
+        this.requests = new Map([
+          [this.learnedFrom, this.template],
+          [url, own.template],
+        ]);
+        this.template = undefined;
+        this.first = undefined;
+        this.status = { state: "learning" };
+        return;
+      }
       this.refuse(result.reason);
       return;
     }
@@ -174,10 +210,46 @@ class Variant {
     }
   }
 
+  /**
+   * Per-request wrappers: a URL's first response teaches its wrapper; a second response for a URL
+   * must match it, and once one has, a URL's first response is enough.
+   */
+  private studyRequest(sample: Sample, response: Head, url: string): void {
+    const requests = this.requests;
+    if (!requests) return;
+    if (JSON.stringify(response.headers) !== JSON.stringify(this.head?.headers)) {
+      this.refuse("Next.js's headers differ between requests");
+      return;
+    }
+    const known = requests.get(url);
+    if (known) {
+      const again = confirm(known, sample);
+      if (!again.ok) {
+        this.refuse(`two responses for one request differ: ${again.reason}`);
+        return;
+      }
+      requests.set(url, again.template);
+      this.repeatable = true;
+      this.status = { state: "served", perRequest: true };
+      return;
+    }
+    const own = learn(sample);
+    if (!own.ok) {
+      this.refuse(own.reason);
+      return;
+    }
+    requests.set(url, own.template);
+    if (requests.size > REQUESTS) {
+      const oldest = requests.keys().next();
+      if (oldest.done !== true) requests.delete(oldest.value);
+    }
+  }
+
   refuse(reason: string): void {
     this.status = { state: "refused", reason };
     this.template = undefined;
     this.first = undefined;
+    this.requests = undefined;
   }
 }
 
@@ -240,9 +312,15 @@ export class Route {
         return this.render(request, learning.islands);
       })
       .catch((error: unknown) => {
+        // `notFound()`, `redirect()`: this request's answer is Next.js's, not the route's.
+        if (controlFlow(error)) return null;
         this.refused = `tsx2rs can't render it: ${error instanceof Error ? error.message : String(error)}`;
         return undefined;
       });
+    if (fragments === null) {
+      await next(req, res);
+      return;
+    }
     if (fragments === undefined) {
       await next(req, res);
       return;
@@ -257,14 +335,14 @@ export class Route {
         [...fragments, ...(metadata ? [metadata] : [])].map((f) => [f.name, f]),
       ),
     };
+    const template = variant.templateFor(url, request.params);
     if (
       pending === undefined &&
-      variant.template &&
+      template &&
       variant.head &&
-      variant.canFill(request.params) &&
-      (metadata || !fragmentNames(variant.template).has("metadata"))
+      (metadata || !fragmentNames(template).has("metadata"))
     ) {
-      const body = fill(variant.template, values);
+      const body = fill(template, values);
       if (this.compress) {
         this.compress(req, res, () => undefined);
         // On a client disconnect the middleware never ends its zlib stream (Next.js's
@@ -302,7 +380,12 @@ export class Route {
         return;
       }
       this.metadata.set(url, found ?? null);
-      learning.study({ document: response.body, ...values, fragments: learned }, response, found);
+      learning.study(
+        { document: response.body, ...values, fragments: learned },
+        response,
+        found,
+        url,
+      );
     });
   }
 }
@@ -396,6 +479,20 @@ function decompress(body: Buffer, encoding: string | string[] | undefined): Buff
     default:
       return undefined;
   }
+}
+
+/**
+ * Whether `error` is Next.js's control flow rather than a failure: `notFound()`, `forbidden()`,
+ * `unauthorized()` (`NEXT_HTTP_ERROR_FALLBACK;<status>`) or `redirect()` (`NEXT_REDIRECT;…`), as
+ * Next.js 16.4.5 marks them (`isHTTPAccessFallbackError`, `isRedirectError`).
+ */
+function controlFlow(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("digest" in error)) return false;
+  const digest = error.digest;
+  return (
+    typeof digest === "string" &&
+    (digest.startsWith("NEXT_HTTP_ERROR_FALLBACK;") || digest.startsWith("NEXT_REDIRECT;"))
+  );
 }
 
 /** Calls every segment getter in Next.js's loader tree: that evaluates the route's modules. */
