@@ -84,22 +84,28 @@ function t0(w, r, k, data, islands) {
     primitive(w, el19[0]);
     value(w, el19[1]["href"]);
     html(w, island20.before);
+    const el21 = el4[11];
+    const island22 = island(islands, 0, el21[1]);
+    reference(w, island22.ref);
+    primitive(w, el21[0]);
+    value(w, el21[1]);
+    html(w, island22.before);
     w.condition(wrap3);
   }
 }
 
 function t1(w, r, k, data, islands) {
-  const wrap21 = k.implicit && r[0][0] !== null;
-  w.condition(wrap21);
-  const el22 = r[0];
-  primitive(w, rootKey(k, el22[0]));
-  const branch23 = el22[1];
-  w.condition(branch23[0]);
-  if (branch23[0]) {
-    call(w, NO_KEYS, branch23[1][0], data[1], (w, r, k) => t1(w, r, k, data, islands));
+  const wrap23 = k.implicit && r[0][0] !== null;
+  w.condition(wrap23);
+  const el24 = r[0];
+  primitive(w, rootKey(k, el24[0]));
+  const branch25 = el24[1];
+  w.condition(branch25[0]);
+  if (branch25[0]) {
+    call(w, NO_KEYS, branch25[1][0], data[1], (w, r, k) => t1(w, r, k, data, islands));
   }
   else {
-    node(w, branch23[1][0]);
+    node(w, branch25[1][0]);
   }
-  w.condition(wrap21);
+  w.condition(wrap23);
 }

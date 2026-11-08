@@ -247,6 +247,10 @@ impl Generator {
         self.line(&format!("const {i} = island(islands, {index}, {el}[1]);"));
         self.line(&format!("reference(w, {i}.ref);"));
         self.line(&format!("primitive(w, {el}[0]);"));
+        if props.iter().any(|p| matches!(p, Prop::Spread(_))) {
+            // The props object, written whole.
+            self.line(&format!("value(w, {el}[1]);"));
+        }
         for prop in props {
             if let Prop::Static { name, .. } | Prop::Dynamic { name, .. } = prop {
                 let name = crate::component::json_string(name);

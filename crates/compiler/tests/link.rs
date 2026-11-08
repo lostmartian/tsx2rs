@@ -533,6 +533,7 @@ export default function Page({ h, p }) {
   return (
     <div>
       <Link {...p} />
+      <Link {...p}>x</Link>
       <Link href={h} icon={<i />} />
       <Link href={h} children="c" />
       <Link href={h} href="/" />
@@ -546,11 +547,12 @@ export default function Page({ h, p }) {
     let Slot::Keyed { record: div, .. } = &page.record[1] else {
         panic!("{:?}", page.record);
     };
-    // Spread, JSX prop, `children` prop, a prop twice: React; `Image`: an island; a client
-    // component at a component's root: React.
+    // A spread: an island, but with JSX children React's; a JSX prop, a `children` prop, a
+    // prop twice: React; `Image`: an island; a client component at a component's root: React.
     assert_eq!(
         links(div),
         [
+            "island next/link",
             "child",
             "child",
             "child",
@@ -559,5 +561,36 @@ export default function Page({ h, p }) {
             "call",
             "child"
         ]
+    );
+}
+
+#[test]
+fn writes_an_islands_spread_props_as_one_object() {
+    let g = graph(&[(
+        "app/page.tsx",
+        r#"import Image from "next/image";
+export default function Page({ p }) {
+  return <div><Image className="c" {...p} /></div>;
+}"#,
+    )]);
+    let page = page(&g);
+    let (html, flight) = rendered(&page, |w| {
+        root_open(w, false, None);
+        w.tag(tag::REFERENCE).string("$L2");
+        w.tag(tag::NULL);
+        // The props object as JSX builds it, `key` taken out.
+        w.tag(tag::OBJECT).count(2);
+        w.string("className").tag(tag::STRING).string("c");
+        w.string("src").tag(tag::STRING).string("/a.png");
+        w.island(r#"<img class="c" src="/a.png"/>"#, 0);
+        root_close(w, false);
+    });
+    assert_eq!(html, r#"<div><img class="c" src="/a.png"/></div>"#);
+    assert_eq!(
+        flight,
+        concat!(
+            r#"0:["$","div",null,{"children":["$","$L2",null,{"className":"c","src":"/a.png"}]}]"#,
+            "\n"
+        )
     );
 }

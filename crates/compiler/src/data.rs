@@ -219,8 +219,12 @@ impl Writer<'_> {
             } => self.keyed(key.as_ref(), *key_at, props, record, tested),
             Slot::RootWrap => return None, // the runtime's (ADR-0008)
             Slot::Island {
-                key, props, record, ..
-            } => self.island(key.as_ref(), props, record, tested),
+                key,
+                key_at,
+                props,
+                record,
+                ..
+            } => self.island(key.as_ref(), *key_at, props, record, tested),
         })
     }
 
@@ -300,6 +304,7 @@ impl Writer<'_> {
     fn island(
         &mut self,
         key: Option<&Key>,
+        key_at: usize,
         props: &[Prop],
         record: &[Slot],
         tested: Option<(Range, &str)>,
@@ -308,14 +313,27 @@ impl Writer<'_> {
             .iter()
             .filter_map(|slot| self.slot(slot, tested))
             .collect();
-        let key = match key {
+        let key_value = match key {
             Some(Key::Static(key)) => json_key(key),
             Some(Key::Dynamic(span)) => format!("({})", self.text(*span)),
             None => "undefined".to_owned(),
         };
+        // After a spread, the key goes inside the props (`createElement(type, config)`), in its
+        // place; `__tsx2rs_el` takes it out as React does.
+        let in_config = props
+            .iter()
+            .take(key_at)
+            .any(|p| matches!(p, Prop::Spread(_)));
+        let mut entries: Vec<String> = props.iter().map(|p| self.prop(p)).collect();
+        let key = if in_config && key.is_some() {
+            entries.insert(key_at.min(entries.len()), format!("\"key\": {key_value}"));
+            "undefined".to_owned()
+        } else {
+            key_value
+        };
         format!(
-            "__tsx2rs_el({}, [{}], {key})",
-            self.props(props),
+            "__tsx2rs_el({{{}}}, [{}], {key})",
+            entries.join(", "),
             values.join(", ")
         )
     }
