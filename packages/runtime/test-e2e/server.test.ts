@@ -172,4 +172,31 @@ describe("the tsx2rs server, for a compiled route", () => {
     expect((await headers(oursUrl, "/p/5")).compiled).toBe("compiled");
     expect((await headers(oursUrl, "/p/6")).compiled).toBe("compiled");
   });
+
+  it("keeps metadata the params explain in the wrapper, and serves any request", async () => {
+    await both("/t/1");
+    await both("/t/2");
+    expect((await state())["/t/[n]"]).toMatchObject({ state: "served" });
+    // Never seen: the title `Item 9` is filled from the param.
+    const [n, ours] = [await headers(nextUrl, "/t/9"), await headers(oursUrl, "/t/9")];
+    expect(ours.compiled).toBe("compiled");
+    expect(ours.body).toBe(n.body);
+    expect(ours.body).toContain("<title>Item 9</title>");
+  });
+
+  it("learns metadata the params don't explain per request", async () => {
+    await both("/m/1");
+    await both("/m/2");
+    // The titles (`One`, `Two`) aren't the params: the metadata is learned per request.
+    expect((await state())["/m/[n]"]).toMatchObject({ state: "served" });
+    for (const path of ["/m/1", "/m/2", "/m/3", "/m/3"]) {
+      const [n, ours] = [await headers(nextUrl, path), await headers(oursUrl, path)];
+      expect(ours.body).toBe(n.body);
+      expect(ours.headers).toEqual(n.headers);
+    }
+    expect((await headers(oursUrl, "/m/1")).compiled).toBe("compiled");
+    // `/m/3` was Next.js's the first time, which taught the route its metadata.
+    expect((await headers(oursUrl, "/m/3")).compiled).toBe("compiled");
+    expect((await headers(oursUrl, "/m/4")).compiled).toBeNull();
+  });
 });

@@ -12,4 +12,6 @@ Real responses from Next.js 16.4.5 (`next start`, Turbopack build) for the adapt
 | `p-5.html` | `/p/5` (a client component, `Counter`) |
 | `p-6.html` | `/p/6` |
 
+And from Vercel Commerce (`tests/apps/commerce`, built with the adapter, `next start`), for `metadata.test.ts` (ADR-0022): `commerce-about.html` (`/about`) and `commerce-terms.html` (`/terms-conditions`), two CMS pages with `generateMetadata`.
+
 To refresh them, build the app, then run `npx next start -p 3471` in it and `curl -s localhost:3471/<request> > <file>`. Chunk names change with every build, so refresh all of them together.
