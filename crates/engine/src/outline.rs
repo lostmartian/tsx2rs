@@ -21,7 +21,7 @@
 //! (`tsx2rs_ir::input::tag::IDENTITY`); the first occurrence React's walk reaches is written, and
 //! later ones as `"$!<index>:<path>"`.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::render::Mark;
 
@@ -43,6 +43,15 @@ pub enum OutlineError {
     /// A string React writes as a text row (`$T`), which the engine doesn't write yet.
     #[error("a string of {0} characters, which React sends as a text row")]
     LongString(usize),
+}
+
+/// One step of a path React registers: an array index, an element's `type`/`key`/`props`, or an
+/// object key (its span in the source, as written).
+#[derive(Clone, Copy)]
+enum Segment {
+    Index(usize),
+    Name(&'static str),
+    Key(usize, usize),
 }
 
 /// A parsed JSON value: its source span and kind.
@@ -87,11 +96,16 @@ pub fn outline(flight: &[u8], marks: &[(usize, Mark)]) -> Result<Vec<Vec<u8>>, O
         .collect();
     let mut marked = HashMap::new();
     let mut identities = HashMap::new();
+    let mut once = HashSet::new();
+    let mut repeated = HashSet::new();
     for &(at, mark) in marks {
         let node = *starts.get(&at).ok_or(OutlineError::Mark(at))?;
         match mark {
             Mark::Identity(identity) => {
                 identities.insert(node, identity);
+                if !once.insert(identity) {
+                    repeated.insert(identity);
+                }
             }
             // Nested components start where their caller's output does; an async component's
             // output is a row whatever is inside it.
@@ -107,6 +121,7 @@ pub fn outline(flight: &[u8], marks: &[(usize, Mark)]) -> Result<Vec<Vec<u8>>, O
         src: flight,
         nodes: &parser.nodes,
         marked,
+        repeated,
         identities,
         written: HashMap::new(),
         rows: vec![Vec::new()],
@@ -129,7 +144,9 @@ struct Outliner<'a> {
     marked: HashMap<usize, Mark>,
     /// Identified objects (node → identity).
     identities: HashMap<usize, u32>,
-    /// Where each identity was first written: its reference.
+    /// The identities that occur more than once: only those are ever referred to.
+    repeated: HashSet<u32>,
+    /// Where each repeated identity was first written: its reference.
     written: HashMap<u32, String>,
     rows: Vec<Vec<u8>>,
     /// Deferred values and their row ids, in creation order.
@@ -140,24 +157,31 @@ impl Outliner<'_> {
     /// A task: `node` as its model, counting from 0, its path the row's (`$!<row>`).
     fn task(&mut self, node: usize, row: usize, out: &mut Vec<u8>) -> Result<(), OutlineError> {
         let mut size = 0;
-        let path = format!("$!{row}");
-        self.write(node, 0, &mut size, out, Some(&path), true)
+        // Paths are only kept while some object repeats: nothing refers to them otherwise.
+        let mut path = Vec::new();
+        let path = (!self.repeated.is_empty()).then_some(&mut path);
+        self.write(node, 0, &mut size, out, path, row, true)
     }
 
-    /// Writes `node`, reached by a key `key_length` long, at `path` (`None` once React stops
-    /// registering paths).
+    /// Writes `node`, reached by a key `key_length` long, at `path` (its segments from the row's
+    /// value; `None` once React stops registering paths, or when nothing repeats).
+    #[allow(clippy::too_many_arguments)]
     fn write(
         &mut self,
         node: usize,
         key_length: usize,
         size: &mut usize,
         out: &mut Vec<u8>,
-        path: Option<&str>,
+        mut path: Option<&mut Vec<Segment>>,
+        row: usize,
         root: bool,
     ) -> Result<(), OutlineError> {
         *size += key_length;
-        let n = &self.nodes[node];
-        if let Some(&identity) = self.identities.get(&node) {
+        let nodes = self.nodes;
+        let n = &nodes[node];
+        if let Some(&identity) = self.identities.get(&node)
+            && self.repeated.contains(&identity)
+        {
             if let Some(reference) = self.written.get(&identity) {
                 // Written before: a reference to it (React doesn't count it).
                 out.push(b'"');
@@ -165,8 +189,9 @@ impl Outliner<'_> {
                 out.push(b'"');
                 return Ok(());
             }
-            if let Some(path) = path {
-                self.written.insert(identity, path.to_owned());
+            if let Some(path) = path.as_deref() {
+                let reference = self.reference(row, path);
+                self.written.insert(identity, reference);
             }
         }
         if !root {
@@ -180,7 +205,9 @@ impl Outliner<'_> {
                 let id = self.rows.len();
                 self.rows.push(Vec::new());
                 self.queue.push_back((node, id));
-                out.extend_from_slice(format!("\"$L!{id}\"").as_bytes());
+                out.extend_from_slice(b"\"$L!");
+                out.extend_from_slice(id.to_string().as_bytes());
+                out.push(b'"');
                 return Ok(());
             }
         }
@@ -196,39 +223,44 @@ impl Outliner<'_> {
             }
             Kind::Literal => out.extend_from_slice(&self.src[n.start..n.end]),
             Kind::Array(items) => {
-                let items = items.clone();
                 let element = self.is_element(node);
                 out.push(b'[');
-                for (i, item) in items.into_iter().enumerate() {
+                for (i, &item) in items.iter().enumerate() {
                     if i > 0 {
                         out.push(b',');
                     }
                     // An element's type, key and props are reached by name.
                     let segment = match (element, i) {
-                        (true, 1) => "type".to_owned(),
-                        (true, 2) => "key".to_owned(),
-                        (true, 3) => "props".to_owned(),
-                        _ => i.to_string(),
+                        (true, 1) => Segment::Name("type"),
+                        (true, 2) => Segment::Name("key"),
+                        (true, 3) => Segment::Name("props"),
+                        _ => Segment::Index(i),
                     };
-                    let child = self.child_path(path, item, &segment);
-                    self.write(item, digits(i), size, out, child.as_deref(), false)?;
+                    let child = self.child(path.as_deref_mut(), item, segment);
+                    let pushed = child.is_some();
+                    self.write(item, digits(i), size, out, child, row, false)?;
+                    if pushed && let Some(path) = path.as_deref_mut() {
+                        path.pop();
+                    }
                 }
                 out.push(b']');
             }
             Kind::Object(props) => {
-                let props = props.clone();
                 out.push(b'{');
-                for (i, ((key_start, key_end), key_length, value)) in props.into_iter().enumerate()
-                {
+                for (i, &((key_start, key_end), key_length, value)) in props.iter().enumerate() {
                     if i > 0 {
                         out.push(b',');
                     }
                     out.extend_from_slice(&self.src[key_start..key_end]);
                     out.push(b':');
                     // The key as written (JSON-escaped), which is how it goes into a reference.
-                    let key = String::from_utf8_lossy(&self.src[key_start + 1..key_end - 1]);
-                    let child = self.child_path(path, value, &key);
-                    self.write(value, key_length, size, out, child.as_deref(), false)?;
+                    let segment = Segment::Key(key_start + 1, key_end - 1);
+                    let child = self.child(path.as_deref_mut(), value, segment);
+                    let pushed = child.is_some();
+                    self.write(value, key_length, size, out, child, row, false)?;
+                    if pushed && let Some(path) = path.as_deref_mut() {
+                        path.pop();
+                    }
                 }
                 out.push(b'}');
             }
@@ -236,12 +268,39 @@ impl Outliner<'_> {
         Ok(())
     }
 
-    /// The path React registers for `node` under its parent's `path` and `segment`: only objects
-    /// and arrays, only while every key on the way is free of `:`.
-    fn child_path(&self, path: Option<&str>, node: usize, segment: &str) -> Option<String> {
+    /// The path React registers for `node` under its parent's path and `segment` (pushed onto
+    /// it): only objects and arrays, only while every key on the way is free of `:`.
+    fn child<'p>(
+        &self,
+        path: Option<&'p mut Vec<Segment>>,
+        node: usize,
+        segment: Segment,
+    ) -> Option<&'p mut Vec<Segment>> {
         let path = path?;
         let object = matches!(self.nodes[node].kind, Kind::Array(_) | Kind::Object(_));
-        (object && !segment.contains(':')).then(|| format!("{path}:{segment}"))
+        let colon =
+            matches!(segment, Segment::Key(start, end) if self.src[start..end].contains(&b':'));
+        if !object || colon {
+            return None;
+        }
+        path.push(segment);
+        Some(path)
+    }
+
+    /// A reference to what's at `path` in row `row`: `$!<row>:<segment>:…`.
+    fn reference(&self, row: usize, path: &[Segment]) -> String {
+        let mut out = format!("$!{row}");
+        for segment in path {
+            out.push(':');
+            match *segment {
+                Segment::Index(i) => out.push_str(&i.to_string()),
+                Segment::Name(name) => out.push_str(name),
+                Segment::Key(start, end) => {
+                    out.push_str(&String::from_utf8_lossy(&self.src[start..end]));
+                }
+            }
+        }
+        out
     }
 
     /// An element: `["$", type, key, props]`, as React writes one.

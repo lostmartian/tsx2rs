@@ -340,3 +340,36 @@ export const order_seen = () => order;
         )
     );
 }
+
+#[test]
+fn memoizes_intl_formatters_by_their_arguments() {
+    // `new Intl.NumberFormat(…)` per render is the app's own code (ADR-0029); a shadowed `Intl`,
+    // a spread, or arguments that aren't plain data aren't memoized.
+    let source = r#"let made = 0;
+const Real = Intl.NumberFormat;
+globalThis.Intl = { ...Intl, NumberFormat: function (...a) { made++; return new Real(...a); } };
+export function Price({ amount, code }) {
+  return <p>{new Intl.NumberFormat(undefined, { style: "currency", currency: code }).format(amount)}</p>;
+}
+export function Shadowed({ Intl, amount }) {
+  return <p>{new Intl.NumberFormat("en").format(amount)}</p>;
+}
+export const made_so_far = () => made;
+"#;
+    let (functions, module) = generated(source);
+    assert!(
+        functions.contains("__tsx2rs_intl(Intl.NumberFormat, undefined, {"),
+        "{functions}"
+    );
+    assert!(
+        functions.contains("new Intl.NumberFormat(\"en\")"),
+        "{functions}"
+    );
+    assert_eq!(
+        run(
+            &module,
+            "[m.__tsx2rs_data_Price({ amount: 5, code: 'USD' }), m.__tsx2rs_data_Price({ amount: 7, code: 'USD' }), m.__tsx2rs_data_Price({ amount: 1, code: 'EUR' }), m.made_so_far()]"
+        ),
+        r#"[[[null,"$5.00"]],[[null,"$7.00"]],[[null,"€1.00"]],2]"#
+    );
+}

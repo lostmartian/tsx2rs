@@ -41,7 +41,33 @@ pub struct Component {
     /// The props it only places (ADR-0005, section 6): a caller's JSX for them can be compiled as
     /// a slot, linked where they're placed.
     pub placed: Vec<Placed>,
+    /// The `Intl` formatters it constructs (`new Intl.NumberFormat(…)`), which its data function
+    /// memoizes by their arguments (ADR-0029).
+    pub formatters: Vec<Formatter>,
 }
+
+/// A `new Intl.X(…)` of the global `Intl`, with arguments but no spread.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Formatter {
+    /// The whole `new` expression.
+    pub span: Range,
+    /// `NumberFormat`, `DateTimeFormat`, …
+    pub name: String,
+    /// Each argument.
+    pub args: Vec<Range>,
+}
+
+/// The `Intl` constructors whose instances are immutable and only format: memoizing them by their
+/// arguments gives the same output.
+const FORMATTERS: &[&str] = &[
+    "Collator",
+    "DateTimeFormat",
+    "DisplayNames",
+    "ListFormat",
+    "NumberFormat",
+    "PluralRules",
+    "RelativeTimeFormat",
+];
 
 /// A prop a component only places: destructured from its props (`{ children }`, no default),
 /// and every reference to it is a `{children}` hole in its templates. A hole at a template's root
@@ -462,6 +488,16 @@ impl Extractor<'_> {
             Candidate::Arrow(arrow) => arrow.params.items.first(),
         };
         let placed = params.map_or_else(Vec::new, |p| self.placed(&p.pattern, &returns));
+        let mut formatters = Formatters {
+            scoping: self.scoping,
+            found: Vec::new(),
+        };
+        match function {
+            Candidate::Function(function) => {
+                formatters.visit_function(function, ScopeFlags::empty());
+            }
+            Candidate::Arrow(arrow) => formatters.visit_arrow_function_expression(arrow),
+        }
         out.push(Component {
             name: name.map(str::to_owned),
             default_export,
@@ -470,6 +506,7 @@ impl Extractor<'_> {
             uses_hooks,
             returns,
             placed,
+            formatters: formatters.found,
         });
     }
 
@@ -1046,6 +1083,35 @@ impl<'a> Visit<'a> for Returns<'_, '_> {
     fn visit_function(&mut self, _: &Function<'a>, _: ScopeFlags) {}
     fn visit_arrow_function_expression(&mut self, _: &ArrowFunctionExpression<'a>) {}
     fn visit_class(&mut self, _: &oxc_ast::ast::Class<'a>) {}
+}
+
+/// The `new Intl.X(…)` expressions in a component, `Intl` being the global.
+struct Formatters<'s> {
+    scoping: &'s Scoping,
+    found: Vec<Formatter>,
+}
+
+impl<'a> Visit<'a> for Formatters<'_> {
+    fn visit_new_expression(&mut self, new: &oxc_ast::ast::NewExpression<'a>) {
+        if let Expression::StaticMemberExpression(member) = &new.callee
+            && let Expression::Identifier(object) = &member.object
+            && object.name == "Intl"
+            && FORMATTERS.contains(&member.property.name.as_str())
+            // The global `Intl`: no binding in scope.
+            && object
+                .reference_id
+                .get()
+                .is_none_or(|r| self.scoping.get_reference(r).symbol_id().is_none())
+            && new.arguments.iter().all(|a| !matches!(a, Argument::SpreadElement(_)))
+        {
+            self.found.push(Formatter {
+                span: range(new.span),
+                name: member.property.name.as_str().to_owned(),
+                args: new.arguments.iter().map(|a| range(a.span())).collect(),
+            });
+        }
+        walk::walk_new_expression(self, new);
+    }
 }
 
 /// Whether a function body calls a hook: `use(…)` or `useX(…)`.

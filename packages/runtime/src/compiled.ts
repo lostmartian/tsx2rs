@@ -396,7 +396,9 @@ export class Route {
         });
         return;
       }
-      if (this.compress) {
+      // Next.js's middleware compresses only for a client that accepts an encoding.
+      const encodings = req.headers["accept-encoding"] ?? "";
+      if (this.compress && /gzip|br|deflate|\*/.test(encodings)) {
         this.compress(req, res, () => undefined);
         // On a client disconnect the middleware never ends its zlib stream (Next.js's
         // `releaseCompressionStream`).

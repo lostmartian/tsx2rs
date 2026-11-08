@@ -49,10 +49,40 @@ pub fn functions(source: &str, components: &[(&Component, &[Slot])]) -> String {
          const __tsx2rs_el = (config, record, key) => {\n\
          \x20 const { key: own, ...props } = config;\n\
          \x20 return [own === undefined ? __tsx2rs_key(key) : \"\" + own, props, ...record];\n\
+         };\n\
+         // `new Intl.X(...args)`, memoized by its arguments when they're plain data (ADR-0029).\n\
+         const __tsx2rs_formats = new Map();\n\
+         const __tsx2rs_plain = (v) => v === undefined || v === null || [\"string\", \"number\", \"boolean\"].includes(typeof v) || (Array.isArray(v) ? v.every(__tsx2rs_plain) : Object.getPrototypeOf(v) === Object.prototype && Object.values(v).every(__tsx2rs_plain));\n\
+         const __tsx2rs_intl = (Type, ...args) => {\n\
+         \x20 if (!args.every(__tsx2rs_plain)) return new Type(...args);\n\
+         \x20 const key = Type.name + JSON.stringify(args, (_, v) => (v === undefined ? \"\\u0000undefined\" : v));\n\
+         \x20 let format = __tsx2rs_formats.get(key);\n\
+         \x20 if (format === undefined) {\n\
+         \x20   if (__tsx2rs_formats.size >= 1000) __tsx2rs_formats.clear();\n\
+         \x20   format = new Type(...args);\n\
+         \x20   __tsx2rs_formats.set(key, format);\n\
+         \x20 }\n\
+         \x20 return format;\n\
          };\n",
     );
     for (component, record) in components {
-        let mut writer = Writer { source, depth: 0 };
+        let formatters = component
+            .formatters
+            .iter()
+            .map(|f| {
+                let args = f.args.iter().fold(String::new(), |mut out, &(start, end)| {
+                    let arg = source.get(start as usize..end as usize).unwrap_or_default();
+                    let _ = write!(out, ", {arg}");
+                    out
+                });
+                (f.span, format!("__tsx2rs_intl(Intl.{}{args})", f.name))
+            })
+            .collect();
+        let mut writer = Writer {
+            source,
+            depth: 0,
+            formatters,
+        };
         let returns = match record {
             [Slot::Returns(returns)] => returns.clone(),
             record => {
@@ -99,13 +129,42 @@ struct Writer<'s> {
     source: &'s str,
     /// Nesting of branches, for unique test variables.
     depth: usize,
+    /// The component's `Intl` formatters, each with the memoizing call that replaces it (ADR-0029).
+    formatters: Vec<(Range, String)>,
 }
 
 impl Writer<'_> {
-    fn text(&self, span: Range) -> &str {
-        self.source
+    /// `span`'s source, with the formatters inside it memoized.
+    fn text(&self, span: Range) -> std::borrow::Cow<'_, str> {
+        let raw = self
+            .source
             .get(span.0 as usize..span.1 as usize)
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let inside: Vec<_> = self
+            .formatters
+            .iter()
+            .filter(|((start, end), _)| *start >= span.0 && *end <= span.1)
+            .collect();
+        if inside.is_empty() {
+            return std::borrow::Cow::Borrowed(raw);
+        }
+        let mut out = String::new();
+        let mut at = span.0;
+        for ((start, end), text) in inside {
+            out.push_str(
+                self.source
+                    .get(at as usize..*start as usize)
+                    .unwrap_or_default(),
+            );
+            out.push_str(text);
+            at = *end;
+        }
+        out.push_str(
+            self.source
+                .get(at as usize..span.1 as usize)
+                .unwrap_or_default(),
+        );
+        std::borrow::Cow::Owned(out)
     }
 
     /// `span`'s source, with each replacement (sorted, not overlapping, inside it) written in.
@@ -115,11 +174,11 @@ impl Writer<'_> {
         let mut out = String::new();
         let mut at = span.0;
         for ((start, end), text) in replacements {
-            out.push_str(self.text((at, start)));
+            out.push_str(&self.text((at, start)));
             out.push_str(&text);
             at = end;
         }
-        out.push_str(self.text((at, span.1)));
+        out.push_str(&self.text((at, span.1)));
         out
     }
 
