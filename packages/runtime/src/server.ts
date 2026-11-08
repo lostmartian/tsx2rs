@@ -63,7 +63,15 @@ export interface Options {
   distDir?: string;
   /** Answer `GET /__tsx2rs` with every compiled route's state (for tests; off by default). */
   status?: boolean;
+  /**
+   * Every this many requests a compiled route would serve itself, Next.js answers instead and the
+   * route compares its own document with Next.js's (ADR-0027). 0 turns re-checks off.
+   */
+  verifyEvery?: number;
 }
+
+/** The default for {@link Options.verifyEvery}. */
+export const VERIFY_EVERY = 100;
 
 /** Whether tsx2rs serves a request (`route`: its page's pathname), or Next.js does, and why. */
 export type Decision =
@@ -107,6 +115,7 @@ export async function createHandler(options: Options): Promise<{
       r as CompiledRoute,
       renderer(r as CompiledRoute, dir, manifestDir),
       build.compress ? compression(dir) : undefined,
+      options.verifyEvery ?? VERIFY_EVERY,
     );
     for (const pathname of r.pathnames)
       if (!pathname.endsWith(".rsc")) compiled.set(pathname, route);
@@ -149,9 +158,15 @@ export async function createHandler(options: Options): Promise<{
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (options.status && req.url === "/__tsx2rs") {
-      const states: Record<string, RouteState & { variants?: Record<string, RouteState> }> = {};
+      const states: Record<
+        string,
+        RouteState & {
+          variants?: Record<string, RouteState>;
+          checks?: { compared: number; differed: number };
+        }
+      > = {};
       for (const [pathname, route] of compiled)
-        states[pathname] = { ...route.state, variants: route.states };
+        states[pathname] = { ...route.state, variants: route.states, checks: route.checks };
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(states));
       return;
     }

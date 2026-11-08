@@ -99,6 +99,11 @@ export class MetadataCache {
     return this.requests.get(request);
   }
 
+  /** Forgets what was learned for `request`. */
+  forget(request: string): void {
+    this.requests.delete(request);
+  }
+
   set(request: string, metadata: Fragment | null): void {
     this.requests.delete(request);
     this.requests.set(request, metadata);

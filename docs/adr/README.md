@@ -32,5 +32,6 @@ Format: [MADR](https://adr.github.io/madr/)-style. Context → Decision → Cons
 | [0024](0024-suspense-boundaries.md) | Suspense boundaries are compiled, and their form is learned from Next.js | Accepted |
 | [0025](0025-flight-rows.md) | The engine splits Flight into rows as React does, and async components are compiled | Accepted |
 | [0026](0026-object-identity.md) | Objects React has written before are written as references | Accepted |
+| [0027](0027-re-checking.md) | Served routes are re-checked against Next.js | Accepted |
 
 Background research (benchmarks, spikes, the full decision history before this repository existed) lives in the separate `tsx2rs-lab` repository.

@@ -14,6 +14,11 @@
  * - a data function that throws (one that reads Next.js's request context, for now);
  * - a response that differs in ways the slots don't explain.
  *
+ * Served routes are **re-checked** (ADR-0027): every `verifyEvery`th request a route would serve,
+ * Next.js answers instead, and the route compares its own document with Next.js's. A difference
+ * means what it learned has gone stale (a product's title changed, a menu got another item): it
+ * forgets what it learned for that request, or relearns its shared wrapper.
+ *
  * A page's metadata is a fragment of its request too, learned from Next.js's response for that
  * request (ADR-0022). A page with client components renders their islands from what it learned for
  * the same request (ADR-0020). A request it hasn't learned them for goes to Next.js, rendered with placeholders,
@@ -258,6 +263,21 @@ class Variant {
     }
   }
 
+  /**
+   * Forgets what was learned for the request `url`, after Next.js answered it differently: its own
+   * wrapper, or the shared one (which the next responses relearn and confirm).
+   */
+  forget(url: string): void {
+    if (this.requests) {
+      this.requests.delete(url);
+      return;
+    }
+    this.template = undefined;
+    this.head = undefined;
+    this.first = undefined;
+    this.status = { state: "learning" };
+  }
+
   refuse(reason: string): void {
     this.status = { state: "refused", reason };
     this.template = undefined;
@@ -278,10 +298,17 @@ export class Route {
   /** Next.js's `compression` middleware, as `next start` applies it (unless `compress: false`). */
   private readonly compress: Compress | undefined;
 
-  constructor(route: CompiledRoute, render: Renderer, compress?: Compress) {
+  /** Every this many requests the route would serve, Next.js answers and the route compares. */
+  private readonly verifyEvery: number;
+  private served = 0;
+  /** Re-checks so far, and how many found a difference. */
+  readonly checks = { compared: 0, differed: 0 };
+
+  constructor(route: CompiledRoute, render: Renderer, compress?: Compress, verifyEvery = 0) {
     this.route = route;
     this.render = render;
     this.compress = compress;
+    this.verifyEvery = verifyEvery;
   }
 
   /** The state of the default variant (requests without cookies, not from a bot), or the
@@ -356,6 +383,19 @@ export class Route {
       (metadata || !fragmentNames(template).has("metadata"))
     ) {
       const body = fill(template, values);
+      if (this.verifyEvery > 0 && req.method !== "HEAD" && ++this.served % this.verifyEvery === 0) {
+        // A re-check: Next.js answers, and what this route would have sent must be the same.
+        await tee(req, res, next, (response) => {
+          if (response.status !== variant.head?.status) return;
+          this.checks.compared++;
+          if (response.body === body) return;
+          this.checks.differed++;
+          this.islands.forget(url);
+          this.metadata.forget(url);
+          variant.forget(url);
+        });
+        return;
+      }
       if (this.compress) {
         this.compress(req, res, () => undefined);
         // On a client disconnect the middleware never ends its zlib stream (Next.js's

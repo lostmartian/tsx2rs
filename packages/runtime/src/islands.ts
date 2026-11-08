@@ -497,6 +497,11 @@ export class IslandCache {
     };
   }
 
+  /** Forgets what was learned for `request`. */
+  forget(request: string): void {
+    this.pages.delete(request);
+  }
+
   set(request: string, calls: Call[], parts: Part[], ids: string[] = []): void {
     this.pages.delete(request);
     this.pages.set(request, { calls, parts, ids });
