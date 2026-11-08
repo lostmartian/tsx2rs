@@ -35,14 +35,14 @@ fn script_escape(flight: String) -> Vec<u8> {
 }
 
 /// A case's Flight and marks, as one render writes them: what `outline` splits into rows.
-fn rendered(case: cases::Case) -> (Vec<u8>, Vec<(usize, Mark)>) {
+fn rendered(case: &cases::Case) -> (Vec<u8>, Vec<(usize, Mark)>) {
     let mut out = case.output();
     render(&case.program, &case.input, &mut out).unwrap();
     (out.flight, out.marks)
 }
 
 #[library_benchmark]
-#[bench::commerce_product(rendered(cases::commerce_product()))]
+#[bench::commerce_product(rendered(&cases::commerce_product()))]
 fn outline_rows((flight, marks): (Vec<u8>, Vec<(usize, Mark)>)) -> Vec<Vec<u8>> {
     outline(black_box(&flight), black_box(&marks)).unwrap()
 }
