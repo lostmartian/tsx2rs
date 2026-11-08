@@ -185,6 +185,111 @@ describe("learnPage", () => {
   });
 });
 
+describe("learnPage, at the edges", () => {
+  /** One boundary with `fallback` and `content` in the placeholders' form, around `before`. */
+  function render(
+    build: (p: ReturnType<typeof placeholders>) => { html: string; segments: string },
+  ) {
+    const p = placeholders();
+    const page = build(p);
+    // A Flight row with one reference per call, in order.
+    const flight = (refs: string[]) => `[${refs.map((r) => `"${r}"`).join(",")}]`;
+    const ours = flight(p.calls.map((_, n) => `$L${n.toString(16)}`));
+    return {
+      learn: (html: string, refs: string[]) =>
+        learnPage(documentWith(html, flight(refs)), { ...page, flight: ours }, p.calls),
+    };
+  }
+
+  it("gives an island in a resolved boundary's fallback its reference and no HTML", () => {
+    const { learn } = render((p) => {
+      const b = p.boundaries();
+      const icon = p.islands(0, {});
+      return {
+        html: `<main>${b.open}<i>${icon.before}</i>${b.close}</main>`,
+        segments: `${b.segment}<b>x</b>${b.end}`,
+      };
+    });
+    expect(learn("<main><!--$--><b>x</b><!--/$--></main>", ["$b", "$L3"])).toMatchObject({
+      ok: true,
+      parts: [{ pending: false }, { ref: "$L3", before: "", after: "" }],
+    });
+  });
+
+  it("ends an island before a boundary where React's marker starts", () => {
+    const { learn } = render((p) => {
+      const link = p.islands(0, {});
+      const b = p.boundaries();
+      return {
+        html: `<main>${link.before}${b.open}${b.close}</main>`,
+        segments: `${b.segment}<b>x</b>${b.end}`,
+      };
+    });
+    expect(learn("<main><a>l</a><!--$--><b>x</b><!--/$--></main>", ["$L3", "$b"])).toMatchObject({
+      ok: true,
+      parts: [{ before: "<a>l</a>" }, { pending: false }],
+    });
+  });
+
+  it("refuses what React's markers don't explain", () => {
+    const one = render((p) => {
+      const b = p.boundaries();
+      return {
+        html: `<main>${b.open}<i>f</i>${b.close}</main>`,
+        segments: `${b.segment}<b>x</b>${b.end}`,
+      };
+    });
+    const refused = (html: string) => one.learn(html, ["$b"]).ok;
+    // Resolved, but not closed; pending, but not closed.
+    expect(refused("<main><!--$--><b>x</b></main>")).toBe(false);
+    expect(refused('<main><!--$?--><template id="B:0"></template><i>f</i></main>')).toBe(false);
+    // Pending, without its segment, without its reveal script, or with another one after it.
+    const shell = '<main><!--$?--><template id="B:0"></template><i>f</i><!--/$--></main>';
+    expect(refused(shell)).toBe(false);
+    expect(refused(`${shell}<script>$RC("B:0","S:0")</script>`)).toBe(false);
+    expect(refused(`${shell}<div hidden id="S:0"><b>x</b></div><p></p>$RC("B:0","S:0")`)).toBe(
+      false,
+    );
+    expect(
+      refused(`${shell}<div hidden id="S:0"><b>y</b></div><script>$RC("B:0","S:0")</script>`),
+    ).toBe(false);
+    // Two islands with nothing between them can't be told apart.
+    const twice = render((p) => {
+      const [a, b] = [p.islands(0, {}), p.islands(0, {})];
+      return { html: `<main>${a.before}${b.before}</main>`, segments: "" };
+    });
+    expect(twice.learn("<main><a></a><a></a></main>", ["$L1", "$L1"])).toMatchObject({
+      ok: false,
+      reason:
+        "the page with its islands and boundaries found 0 times in Next.js's response, not once",
+    });
+  });
+
+  it("refuses a page whose segments aren't one run in the document", () => {
+    const two = render((p) => {
+      const [a, b] = [p.boundaries(), p.boundaries()];
+      return {
+        html: `<main>${a.open}<i>1</i>${a.close}${b.open}<i>2</i>${b.close}</main>`,
+        segments: `${a.segment}<b>1</b>${a.end}${b.segment}<b>2</b>${b.end}`,
+      };
+    });
+    const pending = (n: number) =>
+      `<!--$?--><template id="B:${String(n)}"></template><i>${String(n)}</i><!--/$-->`;
+    const segment = (n: number) =>
+      `<div hidden id="S:${String(n)}"><b>${String(n)}</b></div><script>$RC("B:${String(n)}","S:${String(n)}")</script>`;
+    const shell = `<main>${pending(1)}${pending(2)}</main>`;
+    expect(two.learn(`${shell}${segment(1)}${segment(2)}`, ["$b", "$b"])).toMatchObject({
+      ok: true,
+      segments: `${segment(1)}${segment(2)}`,
+    });
+    expect(
+      two.learn(`${shell}${segment(1)}<p>layout</p>${segment(2)}`, ["$b", "$b"]),
+    ).toMatchObject({
+      ok: false,
+    });
+  });
+});
+
 describe("IslandCache", () => {
   it("answers a request with what it learned for it, in order, and misses anything else", () => {
     const cache = new IslandCache();
@@ -202,6 +307,18 @@ describe("IslandCache", () => {
     expect(() => cache.resolver("/p/5").islands(0, { a: 1 })).toThrow(Miss);
     expect(() => cache.resolver("/p/5").islands(1, {})).toThrow(Miss);
     expect(() => cache.resolver("/p/5").boundaries()).toThrow(Miss);
+  });
+
+  it("keeps the last 10,000 requests", () => {
+    const cache = new IslandCache();
+    for (let i = 0; i <= 10_000; i++) cache.set(`/r/${String(i)}`, [], []);
+    expect(() => cache.resolver("/r/0").boundaries()).toThrow(Miss);
+    cache.set(
+      "/r/1",
+      [{ kind: "boundary" }],
+      [{ ref: "$b", pending: false, open: "", close: "", segment: "", end: "" }],
+    );
+    expect(cache.resolver("/r/1").boundaries().ref).toBe("$b");
   });
 });
 
