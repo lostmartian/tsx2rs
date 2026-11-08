@@ -23,13 +23,11 @@ updates:
         # fails until the supported version moves with it.
         exclude-patterns: ["next", "@next/*"]
     ignore:
-      # typescript-eslint 8 supports TypeScript below 6.1 (see package.json)
+      # TypeScript is updated by hand. tsx2rs is on 6.0 (typescript-eslint 8 supports below 6.1);
+      # the vendored Commerce app stays on the TypeScript it ships with (its tsconfig uses options
+      # TypeScript 6 rejects). Dependabot treats them as one dependency and proposes one version
+      # for both, a downgrade for one of them (#74).
       - dependency-name: typescript
-        versions: [">=6.1.0"]
-      # tsx2rs is on TypeScript 6; the vendored Commerce app stays on the TypeScript it ships
-      # with (its tsconfig uses options TypeScript 6 rejects).
-      - dependency-name: typescript
-        update-types: [version-update:semver-major]
       # Node.js type definitions follow the Node.js major in .node-version (24)
       - dependency-name: "@types/node"
         update-types: [version-update:semver-major]
