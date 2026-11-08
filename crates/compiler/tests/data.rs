@@ -309,3 +309,34 @@ export default function Page({ p, k }) {
         )
     );
 }
+
+#[test]
+fn builds_a_suspense_boundary_as_its_key_fallback_and_children() {
+    // `jsx(Suspense, { fallback, children }, key)`: the fallback, the children, then the key.
+    let source = r#"import { Suspense } from "react";
+let order = [];
+const log = (name, v) => { order.push(name); return v; };
+export default function Page({ x, k }) {
+  return (
+    <main>
+      <Suspense key={log("key", k)} fallback={<i>{log("fallback", "f")}</i>}><b>{log("child", x)}</b></Suspense>
+      <Suspense fallback={null}>{x}</Suspense>
+    </main>
+  );
+}
+export const order_seen = () => order;
+"#;
+    let (functions, module) = generated(source);
+    insta::assert_snapshot!(functions);
+    let module = module.replace(r#"import { Suspense } from "react";"#, "");
+    assert_eq!(
+        run(
+            &module,
+            "[m.__tsx2rs_data_Page({ x: 'v', k: 2 }), m.order_seen()]"
+        ),
+        concat!(
+            r#"[[[null,["2",["f"],"v"],[null,[],"v"]]],"#,
+            r#"["fallback","child","key"]]"#
+        )
+    );
+}

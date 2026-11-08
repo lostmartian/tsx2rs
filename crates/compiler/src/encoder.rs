@@ -39,14 +39,18 @@ pub fn generate(lowered: &Lowered) -> Encoder {
     };
     g.out.push_str(
         "// tsx2rs encoder (generated): writes the records as the engine's input (ADR-0016).\n\
-         import { ENTRY_KEYS, NO_KEYS, Input, attrs, call, html, island, node, primitive, \
-         reference, rootKey, style, value } from \"@tsx2rs/runtime/encode\";\n\n\
-         export function encode(record, data, islands) {\n  const w = new Input();\n  \
-         t0(w, record, ENTRY_KEYS, data, islands);\n  return w.finish();\n}\n",
+         import { ENTRY_KEYS, NO_KEYS, Input, attrs, boundary, call, html, island, node, \
+         primitive, reference, rootKey, style, value } from \"@tsx2rs/runtime/encode\";\n\n\
+         export function encode(record, data, islands, boundaries) {\n  \
+         const w = new Input();\n  \
+         t0(w, record, ENTRY_KEYS, data, islands, boundaries);\n  return w.finish();\n}\n",
     );
     let templates = std::iter::once(&lowered.record).chain(&lowered.templates);
     for (i, record) in templates.enumerate() {
-        let _ = write!(g.out, "\nfunction t{i}(w, r, k, data, islands) {{\n");
+        let _ = write!(
+            g.out,
+            "\nfunction t{i}(w, r, k, data, islands, boundaries) {{\n"
+        );
         g.record(record, "r", 0, "k", true);
         g.out.push_str("}\n");
     }
@@ -196,7 +200,7 @@ impl Generator {
                 let outer = if root { keys } else { "NO_KEYS" };
                 match body {
                     Body::Template(t) => self.line(&format!(
-                        "call(w, {outer}, {v}, data[{index}], (w, r, k) => t{t}(w, r, k, data, islands));"
+                        "call(w, {outer}, {v}, data[{index}], (w, r, k) => t{t}(w, r, k, data, islands, boundaries));"
                     )),
                     Body::Inline(record) => {
                         self.block(
@@ -220,6 +224,9 @@ impl Generator {
                 record,
                 ..
             } => self.island((source, export), props, *children, record, v),
+            Slot::Suspense {
+                fallback, record, ..
+            } => self.suspense(fallback.as_deref(), record, v),
         }
     }
 
@@ -262,6 +269,28 @@ impl Generator {
             self.record(record, &el, 2, "NO_KEYS", false);
             self.line(&format!("html(w, {i}.after);"));
         }
+    }
+
+    /// A `<Suspense>` boundary (ADR-0024): resolved once, then its reference, key, markers,
+    /// fallback and children, each in the output the boundary's form needs.
+    fn suspense(&mut self, fallback: Option<&[Slot]>, record: &[Slot], v: &str) {
+        let (el, b) = (self.var("el"), self.var("boundary"));
+        self.line(&format!("const {el} = {v};"));
+        self.line(&format!("const {b} = boundary(boundaries);"));
+        self.line(&format!("reference(w, {b}.ref);"));
+        self.line(&format!("primitive(w, {el}[0]);"));
+        self.line(&format!("html(w, {b}.open);"));
+        if let Some(fallback) = fallback {
+            // Pending: inline (0); resolved: nowhere (2).
+            self.line(&format!("w.u8({b}.pending ? 0 : 2);"));
+            self.record(fallback, &format!("{el}[1]"), 0, "NO_KEYS", false);
+        }
+        self.line(&format!("html(w, {b}.close);"));
+        // Pending: the segments output (1); resolved: inline (0).
+        self.line(&format!("w.u8({b}.pending ? 1 : 0);"));
+        self.line(&format!("html(w, {b}.segment);"));
+        self.record(record, &el, 2, "NO_KEYS", false);
+        self.line(&format!("html(w, {b}.end);"));
     }
 
     /// One return is just its record; several are `[index, record]`, read as `If`s in order.

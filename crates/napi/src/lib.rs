@@ -120,6 +120,8 @@ pub struct TemplateProgram {
 pub struct Rendered {
     /// The HTML.
     pub html: String,
+    /// The HTML of pending `<Suspense>` boundaries' content, which React sends after the shell.
+    pub segments: String,
     /// The Flight model, not yet split into rows or escaped for a `<script>`.
     pub flight: String,
     /// What React DOM hoists into `<head>`, in its order (empty if nothing).
@@ -163,6 +165,7 @@ impl TemplateProgram {
         };
         Ok(Rendered {
             html: text(output.html)?,
+            segments: text(output.segments)?,
             flight: text(output.flight)?,
             head: text(head)?,
             hints: text(output.hints.rows().to_vec())?,

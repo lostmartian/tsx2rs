@@ -4,8 +4,8 @@ expression: out
 ---
 app/[page]/page.tsx: compiled (307 program bytes, entry __tsx2rs_data_Page, 1 callees)
 app/page.tsx: compiled (84 program bytes, entry __tsx2rs_data_HomePage, 0 callees)
-app/product-streaming/[handle]/page.tsx: compiled (866 program bytes, entry __tsx2rs_data_ProductPage, 0 callees)
-app/product/[handle]/page.tsx: compiled (866 program bytes, entry __tsx2rs_data_ProductPage, 0 callees)
+app/product-streaming/[handle]/page.tsx: compiled (2526 program bytes, entry __tsx2rs_data_ProductPage, 3 callees)
+app/product/[handle]/page.tsx: compiled (2332 program bytes, entry __tsx2rs_data_ProductPage, 3 callees)
 app/search/[collection]/page.tsx: falls back
   TSX2RS_E0004 components/layout/product-grid-items.tsx:315-374: a member of an imported component (`<A.B>`) other than a namespace export
 app/search/page.tsx: falls back

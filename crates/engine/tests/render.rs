@@ -1180,3 +1180,72 @@ proptest! {
         let _ = render(&every_op, &bytes, &mut Output::new());
     }
 }
+
+#[test]
+fn sends_html_inline_to_segments_or_nowhere_and_flight_always() {
+    use tsx2rs_ir::input::html_output;
+    // A boundary: its fallback (`f`), then its content (`c`), each in an output the input picks.
+    let p = Builder::default()
+        .op(Op::HtmlOutput)
+        .stat("<i>f</i>", r#""f""#)
+        .op(Op::EndHtmlOutput)
+        .op(Op::HtmlOutput)
+        .stat("<b>c</b>", r#""c""#)
+        .op(Op::EndHtmlOutput)
+        .stat("<p>after</p>", "")
+        .build();
+    let render = |fallback: u8, content: u8| {
+        let mut output = Output::new();
+        render(&p, &[fallback, content], &mut output).unwrap();
+        (
+            String::from_utf8(output.html).unwrap(),
+            String::from_utf8(output.segments).unwrap(),
+            String::from_utf8(output.flight).unwrap(),
+        )
+    };
+    // Resolved: no fallback, the content inline.
+    assert_eq!(
+        render(html_output::NONE, html_output::INLINE),
+        (
+            "<b>c</b><p>after</p>".into(),
+            String::new(),
+            r#""f""c""#.into()
+        )
+    );
+    // Pending: the fallback inline, the content in the segments output.
+    assert_eq!(
+        render(html_output::INLINE, html_output::SEGMENTS),
+        (
+            "<i>f</i><p>after</p>".into(),
+            "<b>c</b>".into(),
+            r#""f""c""#.into()
+        )
+    );
+}
+
+#[test]
+fn rejects_bad_or_unbalanced_html_outputs_and_pending_boundaries_inside_others() {
+    use tsx2rs_ir::input::html_output;
+    let open = Builder::default().op(Op::HtmlOutput).build();
+    assert_eq!(
+        error(&open, &[html_output::INLINE]),
+        RenderError::UnbalancedHtmlOutput { offset: 1 }
+    );
+    assert_eq!(
+        error(&open, &[7]),
+        RenderError::BadHtmlOutput {
+            offset: 0,
+            value: 7
+        }
+    );
+    let nested = Builder::default()
+        .op(Op::HtmlOutput)
+        .op(Op::HtmlOutput)
+        .op(Op::EndHtmlOutput)
+        .op(Op::EndHtmlOutput)
+        .build();
+    assert_eq!(
+        error(&nested, &[html_output::SEGMENTS, html_output::SEGMENTS]),
+        RenderError::UnsupportedBoundary { offset: 1 }
+    );
+}

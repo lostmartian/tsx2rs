@@ -82,6 +82,13 @@ fn links(record: &[Slot]) -> Vec<String> {
                 out.push(format!("island {source}"));
                 out.extend(links(record));
             }
+            Slot::Suspense {
+                fallback, record, ..
+            } => {
+                out.push("suspense".to_owned());
+                out.extend(links(fallback.as_deref().unwrap_or_default()));
+                out.extend(links(record));
+            }
             Slot::Value {
                 kind: ValueKind::Child,
                 ..
@@ -591,6 +598,78 @@ export default function Page({ p }) {
         concat!(
             r#"0:["$","div",null,{"children":["$","$L2",null,{"className":"c","src":"/a.png"}]}]"#,
             "\n"
+        )
+    );
+}
+
+#[test]
+fn renders_a_suspense_boundary_resolved_or_pending() {
+    use tsx2rs_ir::input::html_output;
+    let g = graph(&[(
+        "app/page.tsx",
+        r#"import { Suspense } from "react";
+export default function Page({ x }) {
+  return <main><Suspense fallback={<i>wait</i>}><b>{x}</b></Suspense>!</main>;
+}"#,
+    )]);
+    let page = page(&g);
+    let Slot::Keyed { record: main, .. } = &page.record[1] else {
+        panic!("{:?}", page.record);
+    };
+    assert!(
+        matches!(
+            main.as_slice(),
+            [Slot::Suspense {
+                fallback: Some(_),
+                ..
+            }]
+        ),
+        "{main:?}"
+    );
+    let render = |pending: bool| {
+        let mut w = InputWriter::new();
+        root_open(&mut w, false, None);
+        w.tag(tag::REFERENCE).string("$b");
+        w.tag(tag::NULL);
+        if pending {
+            w.island(r#"<!--$?--><template id="B:1"></template>"#, 0);
+            w.html_output(html_output::INLINE);
+            w.island("<!--/$-->", 0);
+            w.html_output(html_output::SEGMENTS);
+            w.island(r#"<div hidden id="S:1">"#, 0);
+        } else {
+            w.island("<!--$-->", 0);
+            w.html_output(html_output::NONE);
+            w.island("", 0);
+            w.html_output(html_output::INLINE);
+            w.island("", 0);
+        }
+        w.tag(tag::STRING).string("x");
+        w.island(if pending { "</div>" } else { "<!--/$-->" }, 0);
+        root_close(&mut w, false);
+        let mut output = Output::new();
+        render(&page.program, &w.finish(), &mut output).unwrap();
+        (
+            String::from_utf8(output.html).unwrap(),
+            String::from_utf8(output.segments).unwrap(),
+            String::from_utf8(output.flight).unwrap(),
+        )
+    };
+    let flight = r#"["$","main",null,{"children":[["$","$b",null,{"fallback":["$","i",null,{"children":"wait"}],"children":["$","b",null,{"children":"x"}]}],"!"]}]"#;
+    assert_eq!(
+        render(false),
+        (
+            "<main><!--$--><b>x</b><!--/$-->!</main>".into(),
+            String::new(),
+            flight.into()
+        )
+    );
+    assert_eq!(
+        render(true),
+        (
+            r#"<main><!--$?--><template id="B:1"></template><i>wait</i><!--/$-->!</main>"#.into(),
+            r#"<div hidden id="S:1"><b>x</b></div>"#.into(),
+            flight.into()
         )
     );
 }

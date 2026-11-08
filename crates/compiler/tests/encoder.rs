@@ -16,6 +16,7 @@ fn writes_straight_line_code_per_template() {
     let p = Project::new(&[(
         "app/page.tsx",
         r#"import Link from "next/link";
+import { Suspense } from "react";
 function Tree({ n }) { return <ol>{n > 0 && <Tree n={n - 1} />}</ol>; }
 function Card({ title, children }) { return <article>{title}{children}</article>; }
 export default function Page({ a, xs, rest, s }) {
@@ -31,6 +32,7 @@ export default function Page({ a, xs, rest, s }) {
       <Link href={a} prefetch={false}>{a}<i>x</i></Link>
       <Link href="/" key={a} />
       <Link {...rest} />
+      <Suspense fallback={<hr />}><b>{a}</b></Suspense>
     </main>
   );
 }"#,

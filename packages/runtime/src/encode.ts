@@ -205,6 +205,35 @@ export function island(
 }
 
 /**
+ * What Next.js rendered for a `<Suspense>` boundary (ADR-0024), learned from its responses: the
+ * boundary's reference (React's `Suspense` symbol row, `$b`), whether it was pending, and its
+ * markers. Resolved: `<!--$-->`, then its children, then `<!--/$-->`. Pending: `<!--$?-->` and
+ * its `<template id="B:…">`, its fallback, `<!--/$-->`; then, in the segments output, its
+ * `<div hidden id="S:…">`, its children and `</div>` with React's reveal script.
+ */
+export interface Boundary {
+  readonly ref: string;
+  readonly pending: boolean;
+  /** Before the fallback. */
+  readonly open: string;
+  /** After the fallback: the end of the boundary's part of the shell when it's pending. */
+  readonly close: string;
+  /** Before the children. */
+  readonly segment: string;
+  /** After the children. */
+  readonly end: string;
+}
+
+/** Resolves each `<Suspense>` boundary a route renders, in render order. */
+export type Boundaries = () => Boundary;
+
+/** A `<Suspense>` boundary, or {@link NotNative} when there's no resolver. */
+export function boundary(boundaries: Boundaries | undefined): Boundary {
+  if (boundaries === undefined) throw new NotNative("a Suspense boundary, not learned yet", null);
+  return boundaries();
+}
+
+/**
  * `Op::Island`: HTML as React wrote it. Its text-edge flags are 0: a learned island's HTML
  * includes the `<!-- -->` separators React wrote next to it.
  */

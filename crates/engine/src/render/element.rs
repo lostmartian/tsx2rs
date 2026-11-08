@@ -412,6 +412,9 @@ impl<'i> Renderer<'_, '_> {
             self.out.html.push(b'>');
         }
         if hoist {
+            if !self.inline() {
+                return Err(RenderError::UnsupportedBoundary { offset });
+            }
             let written = self.out.html.split_off(start);
             self.hoist(kind, &state, &written, start, content_range);
             // React leaves a text separator where it hoisted anything but a `<title>`.
@@ -588,6 +591,9 @@ impl<'i> Renderer<'_, '_> {
     /// An `<img>`'s preload link (`pushLinkImpl` with the props React builds in the `img` case
     /// of `pushStartInstance`), queued in the `<head>`.
     fn image_preload(&mut self, image: &[Kept<'i>; 9], offset: usize) -> Result<(), RenderError> {
+        if !self.inline() {
+            return Err(RenderError::UnsupportedBoundary { offset });
+        }
         let [
             src,
             src_set,

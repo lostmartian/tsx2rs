@@ -120,6 +120,13 @@ pub enum Op {
         /// The template to run.
         template: TemplateId,
     },
+    /// Reads where the HTML of the ops up to the matching [`Op::EndHtmlOutput`] goes
+    /// ([`crate::input::html_output`]): inline, the segments output (a `<Suspense>` boundary's
+    /// content React sends after the shell), or nowhere (a fallback React doesn't render). Flight
+    /// is unaffected. A boundary's markers are [`Op::Island`]s, so the runtime decides its form.
+    HtmlOutput,
+    /// Ends the innermost [`Op::HtmlOutput`].
+    EndHtmlOutput,
 }
 
 impl Op {
@@ -128,7 +135,11 @@ impl Op {
     pub const fn reads_input(self) -> bool {
         !matches!(
             self,
-            Self::Static { .. } | Self::EndLoop | Self::Jump { .. } | Self::Call { .. }
+            Self::Static { .. }
+                | Self::EndLoop
+                | Self::Jump { .. }
+                | Self::Call { .. }
+                | Self::EndHtmlOutput
         )
     }
 }
@@ -325,7 +336,9 @@ fn validate(
             | Op::RawHtml
             | Op::Value
             | Op::Child
-            | Op::Island => {}
+            | Op::Island
+            | Op::HtmlOutput
+            | Op::EndHtmlOutput => {}
         }
     }
     if let Some(&(start, _)) = loops.last() {

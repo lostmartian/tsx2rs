@@ -36,7 +36,7 @@ describe("compileApp", () => {
     // The program's binary format: an 8-byte magic, then its version (u16 LE).
     expect(route?.program?.subarray(0, 8).toString("latin1")).toBe("TSX2RSP\0");
     expect(route?.program?.readUInt16LE(8)).toBe(programFormatVersion());
-    expect(route?.encoder).toContain("export function encode(record, data, islands)");
+    expect(route?.encoder).toContain("export function encode(record, data, islands, boundaries)");
     expect(route?.entry).toEqual({ module: "app/p/[n]/page.tsx", name: "__tsx2rs_data_Page" });
     expect(route?.callees).toEqual([
       { module: "components/price.tsx", name: "__tsx2rs_data_Price" },
