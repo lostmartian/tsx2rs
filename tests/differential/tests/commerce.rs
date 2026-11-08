@@ -68,9 +68,9 @@ fn commerce_components_round_trip_its_data() {
 }
 
 #[test]
-fn hands_client_components_with_a_spread_to_react() {
-    // `<Image {...props} />`: a client component with a spread isn't an island yet (ADR-0020), so
-    // the encoder stops at its hole, where the runtime hands it to React.
+fn stops_at_islands_without_a_resolver() {
+    // `<Image {...props} />` is an island (ADR-0020): without the runtime's resolver, which learns
+    // it from Next.js, the encoder can't write it.
     let graph = graph();
     let (module, index) = component(&graph, "components/grid/tile.tsx", "GridTileImage");
     let compiled = compile_component(&graph, &app(), module, index).unwrap();
@@ -79,5 +79,8 @@ fn hands_client_components_with_a_spread_to_react() {
     let error = fixtures
         .check_compiled(&compiled, page, &cases("tileWithImage"))
         .unwrap_err();
-    assert!(error.contains("a component element"), "{error}");
+    assert!(
+        error.contains("a client component element, not learned yet"),
+        "{error}"
+    );
 }

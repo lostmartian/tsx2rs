@@ -144,7 +144,12 @@ pub enum Slot {
         export: Export,
         /// The key as written.
         key: Option<Key>,
-        /// The props, in source order: no spreads, no JSX, no `children`, no name twice.
+        /// Where the key is written among the props (`ComponentElement::key_at`): after a spread,
+        /// the JSX transform passes it inside the props object.
+        key_at: usize,
+        /// The props, in source order, no JSX. Without a spread: no `children`, no name twice,
+        /// and each is an `Op::Value`. With one: the element has no children, and the props
+        /// object is one `Op::Value`.
         props: Vec<Prop>,
         /// Whether it has children (and so a second `Op::Island`).
         children: bool,
@@ -329,8 +334,9 @@ struct Callee<'g> {
 
 impl<'g> Link<'g> {
     /// The client component `element` renders, with its props, when it can be an island
-    /// (ADR-0020): a module-level binding, props that are all values without a spread, no
-    /// `children` prop, and no prop given twice.
+    /// (ADR-0020): a module-level binding whose props are all values. With a spread, the props
+    /// are one object (`Slot::Island`), so it has no JSX children; without one, no `children`
+    /// prop and no prop given twice.
     fn island(&self, element: &ComponentElement) -> Option<(String, Export, Vec<Prop>)> {
         if !element.module_scope {
             return None;
@@ -342,11 +348,22 @@ impl<'g> Link<'g> {
             return None;
         };
         let mut props: Vec<Prop> = Vec::new();
+        let spread = element
+            .props
+            .iter()
+            .any(|p| matches!(p, ComponentProp::Value(Prop::Spread(_))));
+        if spread && !element.children.is_empty() {
+            return None;
+        }
         for prop in &element.props {
             let ComponentProp::Value(prop) = prop else {
                 return None; // JSX props: React would render them inside the island
             };
             let name = match prop {
+                _ if spread => {
+                    props.push(prop.clone());
+                    continue;
+                }
                 Prop::Static { name, .. } | Prop::Dynamic { name, .. } => name,
                 Prop::Spread(_) => return None,
             };
@@ -583,6 +600,23 @@ impl Lowering<'_> {
         self.op(Op::Value); // the reference
         self.structure(b"", b",");
         self.op(Op::Value); // the key
+        if props.iter().any(|p| matches!(p, Prop::Spread(_))) {
+            // The props object as JSX builds it, written whole (no children: `Link::island`).
+            self.structure(b"", b",");
+            self.op(Op::Value);
+            self.op(Op::Island);
+            self.structure(b"", b"]");
+            return Ok(Slot::Island {
+                source,
+                export,
+                key: element.key.clone(),
+                key_at: element.key_at,
+                props,
+                children: false,
+                record: Vec::new(),
+                span: element.span,
+            });
+        }
         self.structure(b"", b",{");
         for (i, prop) in props.iter().enumerate() {
             if let Prop::Static { name, .. } | Prop::Dynamic { name, .. } = prop {
@@ -609,6 +643,7 @@ impl Lowering<'_> {
             source,
             export,
             key: element.key.clone(),
+            key_at: element.key_at,
             props,
             children,
             record,

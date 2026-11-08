@@ -281,3 +281,31 @@ export const order_seen = () => order;
         )
     );
 }
+
+#[test]
+fn builds_an_island_with_a_spread_as_jsx_builds_its_props() {
+    // A key after a spread is inside the props (`createElement`), and wins over the spread's.
+    let source = r#"import Image from "next/image";
+export default function Page({ p, k }) {
+  return (
+    <div>
+      <Image className="c" {...p} key={k} />
+      <Image key="s" {...p} />
+    </div>
+  );
+}
+"#;
+    let (functions, module) = generated(source);
+    insta::assert_snapshot!(functions);
+    let module = module.replace(r#"import Image from "next/image";"#, "");
+    assert_eq!(
+        run(
+            &module,
+            "m.__tsx2rs_data_Page({ p: { src: '/a', key: 'p' }, k: 1 })"
+        ),
+        concat!(
+            r#"[[null,["1",{"className":"c","src":"/a"}],"#,
+            r#"["p",{"src":"/a"}]]]"#
+        )
+    );
+}
