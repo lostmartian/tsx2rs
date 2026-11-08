@@ -84,3 +84,26 @@ fn trims_jsx_text_like_the_jsx_transform() {
     assert_eq!(jsx_text("\n   \n\t\n"), None);
     assert_eq!(jsx_text("a\r\n  b"), Some("a b".into()));
 }
+
+#[test]
+fn decodes_character_references_as_the_jsx_lexer_does() {
+    use tsx2rs_compiler::component::decode_entities;
+    assert_eq!(decode_entities("&copy; 2026"), "\u{a9} 2026");
+    assert_eq!(decode_entities("&#169;&#xA9;&#xa9;"), "\u{a9}\u{a9}\u{a9}");
+    assert_eq!(decode_entities("a &amp; b &lt;c&gt;"), "a & b <c>");
+    // Not references: kept as written.
+    for raw in [
+        "&notanentity;",
+        "&amp",
+        "& x;",
+        "&#;",
+        "&#x;",
+        "&#-1;",
+        "&#xZZ;",
+    ] {
+        assert_eq!(decode_entities(raw), raw, "{raw}");
+    }
+    assert_eq!(decode_entities("&thetasym;&AElig;"), "\u{3d1}\u{c6}");
+    // Decoded before JSX trims its lines.
+    assert_eq!(jsx_text("\n  &copy;  \n"), Some("\u{a9}".into()));
+}

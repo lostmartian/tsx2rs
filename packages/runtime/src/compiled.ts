@@ -37,7 +37,15 @@ import {
   type Template,
 } from "./capture.ts";
 import type { Boundaries, Islands } from "./encode.ts";
-import { IslandCache, Miss, learnPage, placeholders, type Call } from "./islands.ts";
+import {
+  IslandCache,
+  Miss,
+  learnPage,
+  placeholders,
+  withIds,
+  type Call,
+  type Resolvers,
+} from "./islands.ts";
 import { MetadataCache, findMetadata } from "./metadata.ts";
 
 /** A compiled page route in the manifest. */
@@ -63,7 +71,7 @@ type Encode = (
   data: DataFunction[],
   islands?: Islands,
   boundaries?: Boundaries,
-) => Uint8Array;
+) => Uint8Array | Promise<Uint8Array>;
 
 /** Where a compiled route stands. */
 export type RouteState =
@@ -370,17 +378,19 @@ export class Route {
       if (calls !== undefined) {
         const page = fragments.find((f) => f.name === "page");
         const segments = fragments.find((f) => f.name === "segments")?.html ?? "";
-        const parts = page && learnPage(response.body, { ...page, segments }, calls);
+        const rows = fragments.filter((f) => f.name.startsWith("row:")).map((f) => f.flight);
+        const parts = page && learnPage(response.body, { ...page, segments, rows }, calls);
         if (!parts?.ok) {
           learning.refuse(parts?.reason ?? "no page fragment");
           return;
         }
-        this.islands.set(url, calls, parts.parts);
+        this.islands.set(url, calls, parts.parts, parts.ids);
         learned = [
           { name: "page", html: parts.html, flight: parts.flight },
           ...(parts.segments === ""
             ? []
             : [{ name: "segments", html: parts.segments, flight: "" }]),
+          ...parts.rows.map((row, i) => ({ name: `row:${String(i + 1)}`, html: "", flight: row })),
         ];
       }
       const found = findMetadata(response.body);
@@ -403,13 +413,7 @@ export class Route {
  * What a route renders per request: its fragments (ADR-0018), the page and its segments (the
  * content of pending `<Suspense>` boundaries, ADR-0024), with what React renders inside it.
  */
-export type Renderer = (request: Request, parts?: Parts) => Promise<Fragment[]>;
-
-/** Resolvers for what React renders inside a page: islands (ADR-0020), boundaries (ADR-0024). */
-export interface Parts {
-  islands: Islands;
-  boundaries: Boundaries;
-}
+export type Renderer = (request: Request, parts?: Resolvers) => Promise<Fragment[]>;
 
 /**
  * The renderer of a compiled route of the app in `dir`: the page's data function (from the
@@ -454,17 +458,23 @@ export function renderer(route: CompiledRoute, dir: string, manifestDir: string)
       searchParams: Promise.resolve(request.query),
     };
     const record = await entry(props);
-    const input = encode(record, callees, parts?.islands, parts?.boundaries);
+    // Async when the page has an async component (ADR-0025).
+    const input = await encode(record, callees, parts?.islands, parts?.boundaries);
     const out = program.render(Buffer.from(input.buffer, input.byteOffset, input.byteLength));
-    if (out.rows.length > 0) {
-      throw new Error("the page's Flight has rows of their own (not yet served by tsx2rs)");
-    }
+    // The rows the page defers to (ADR-0025), with the ids Next.js gave them, or placeholders
+    // while they're learned.
+    // References to rows or to objects written before need the rows' ids (ADR-0025, ADR-0026).
+    const placeholders = [out.flight, ...out.rows].some((row) => /"\$L?!/.test(row));
+    if (placeholders && !parts) throw new Error("the page's Flight rows need their ids");
+    const ids = placeholders ? parts?.rows(out.rows.length) : [];
+    const fix = (row: string) => (ids === undefined ? row : withIds(row, ids));
     if (out.head !== "" || out.hints !== "") {
       throw new Error("the page hoists into <head> (not yet served by tsx2rs)");
     }
     return [
-      { name: "page", html: out.html, flight: out.flight },
+      { name: "page", html: out.html, flight: fix(out.flight) },
       ...(out.segments === "" ? [] : [{ name: "segments", html: out.segments, flight: "" }]),
+      ...out.rows.map((row, i) => ({ name: `row:${String(i + 1)}`, html: "", flight: fix(row) })),
     ];
   };
 }

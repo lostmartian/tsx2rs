@@ -3,9 +3,9 @@ source: crates/compiler/tests/build.rs
 expression: out
 ---
 app/[page]/page.tsx: compiled (309 program bytes, entry __tsx2rs_data_Page, 1 callees)
-app/page.tsx: compiled (8230 program bytes, entry __tsx2rs_data_HomePage, 9 callees)
-app/product-streaming/[handle]/page.tsx: compiled (8521 program bytes, entry __tsx2rs_data_ProductPage, 9 callees)
-app/product/[handle]/page.tsx: compiled (8327 program bytes, entry __tsx2rs_data_ProductPage, 9 callees)
+app/page.tsx: compiled (8218 program bytes, entry __tsx2rs_data_HomePage, 9 callees)
+app/product-streaming/[handle]/page.tsx: compiled (8509 program bytes, entry __tsx2rs_data_ProductPage, 9 callees)
+app/product/[handle]/page.tsx: compiled (8315 program bytes, entry __tsx2rs_data_ProductPage, 9 callees)
 app/search/[collection]/page.tsx: falls back
   TSX2RS_E0004 components/layout/product-grid-items.tsx:315-374: a member of an imported component (`<A.B>`) other than a namespace export
 app/search/page.tsx: falls back

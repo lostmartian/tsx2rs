@@ -16,7 +16,7 @@ use oxc_semantic::{Scoping, SymbolId};
 use oxc_span::{GetSpan, Span};
 use oxc_syntax::scope::ScopeFlags;
 
-use crate::component::jsx_text;
+use crate::component::{decode_entities, jsx_text};
 
 /// A source range: byte offsets (start, end).
 pub type Range = (u32, u32);
@@ -785,10 +785,11 @@ impl Extractor<'_> {
         let name = attribute_name(&attribute.name);
         let value = match &attribute.value {
             None => Ok(Value::Bool(true)), // <input disabled />
+            // A JSX attribute's string has its character references decoded (`&copy;`).
             Some(JSXAttributeValue::StringLiteral(s)) => s
                 .value
                 .as_str()
-                .map(|v| Value::String(v.to_owned()))
+                .map(|v| Value::String(decode_entities(v).into_owned()))
                 .ok_or(range(s.span)),
             // The parser rejects an empty `{}` prop value, so the expression is there.
             Some(JSXAttributeValue::ExpressionContainer(container)) => container
@@ -805,7 +806,9 @@ impl Extractor<'_> {
                 _ => None,
             };
             let literal = match &attribute.value {
-                Some(JSXAttributeValue::StringLiteral(s)) => s.value.as_str().map(str::to_owned),
+                Some(JSXAttributeValue::StringLiteral(s)) => {
+                    s.value.as_str().map(|v| decode_entities(v).into_owned())
+                }
                 _ => expression.and_then(key_literal),
             };
             return PropOrKey::Key(match (literal, expression) {
