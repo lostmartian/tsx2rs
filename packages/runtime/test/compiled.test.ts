@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Route, type CompiledRoute, type Renderer, type Compress } from "../src/compiled.js";
 import { decision, variant } from "../src/server.js";
 
-/** Real Next.js 16.4.3 documents for `app/q/[n]/page.tsx` (see test/next/README.md). */
+/** Real Next.js 16.4.5 documents for `app/q/[n]/page.tsx` (see test/next/README.md). */
 const files = [
   ["3", "q-3"],
   ["7", "q-7"],

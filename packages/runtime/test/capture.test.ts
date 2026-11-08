@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { confirm, confirmed, fill, learn, type Sample, type Template } from "../src/capture.js";
 
 /**
- * Real responses from Next.js 16.4.3 (`next start`) for the adapter's test page
+ * Real responses from Next.js 16.4.5 (`next start`) for the adapter's test page
  * `app/q/[n]/page.tsx` (packages/adapter/test-e2e/app); see test/next/README.md.
  */
 const doc = (name: string) =>

@@ -7,7 +7,7 @@ import type { Islands } from "../src/encode.js";
 import { IslandCache, Miss, learnIslands, placeholders } from "../src/islands.js";
 
 /**
- * Real Next.js 16.4.3 documents for `app/p/[n]/page.tsx`, whose `<Counter />` is a client
+ * Real Next.js 16.4.5 documents for `app/p/[n]/page.tsx`, whose `<Counter />` is a client
  * component (see test/next/README.md).
  */
 const doc = (n: string) => readFileSync(join(import.meta.dirname, "next", `p-${n}.html`), "utf8");
