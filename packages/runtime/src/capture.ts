@@ -377,6 +377,15 @@ export function fill(template: Template, values: Values): string {
   return out;
 }
 
+/** The names of the fragments a template is filled with. */
+export function fragmentNames(template: Template): Set<string> {
+  const names = new Set<string>();
+  for (const unit of template.units) {
+    for (const part of unit.parts) if ("fragment" in part) names.add(part.fragment);
+  }
+  return names;
+}
+
 /** Whether every param's candidates are decided, so any values can fill the template. */
 export function confirmed(template: Template): boolean {
   return template.units.every((unit) => unit.parts.every((part) => !("candidate" in part)));

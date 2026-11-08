@@ -14,8 +14,9 @@
  * - a data function that throws (one that reads Next.js's request context, for now);
  * - a response that differs in ways the slots don't explain.
  *
- * A page with client components renders their islands from what it learned for the same request
- * (ADR-0020). A request it hasn't learned them for goes to Next.js, rendered with placeholders,
+ * A page's metadata is a fragment of its request too, learned from Next.js's response for that
+ * request (ADR-0022). A page with client components renders their islands from what it learned for
+ * the same request (ADR-0020). A request it hasn't learned them for goes to Next.js, rendered with placeholders,
  * and the runtime learns them from Next.js's response before it learns or confirms the wrapper.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -26,9 +27,18 @@ import { Duplex } from "node:stream";
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import { pathToFileURL } from "node:url";
 import { Program } from "@tsx2rs/native";
-import { confirm, confirmed, fill, learn, type Fragment, type Template } from "./capture.ts";
+import {
+  confirm,
+  confirmed,
+  fill,
+  fragmentNames,
+  learn,
+  type Fragment,
+  type Template,
+} from "./capture.ts";
 import type { Islands } from "./encode.ts";
 import { IslandCache, Miss, learnIslands, placeholders, type Call } from "./islands.ts";
+import { MetadataCache, findMetadata } from "./metadata.ts";
 
 /** A compiled page route in the manifest. */
 export interface CompiledRoute {
@@ -47,6 +57,7 @@ interface DataFunctionName {
 }
 
 type DataFunction = (props: unknown) => unknown;
+type Sample = Parameters<typeof learn>[0];
 type Encode = (record: unknown, data: DataFunction[], islands?: Islands) => Uint8Array;
 
 /** Where a compiled route stands. */
@@ -98,6 +109,12 @@ class Variant {
   status: RouteState = { state: "learning" };
   template: Template | undefined;
   head: Head | undefined;
+  /**
+   * The response the template was learned from, with its metadata, until the template is
+   * confirmed: relearned with the metadata as a fragment if the wrapper can't be confirmed with
+   * the metadata in it (ADR-0022).
+   */
+  private first: { sample: Sample; metadata: Fragment } | undefined;
 
   canFill(params: Record<string, string>): boolean {
     const status = this.status;
@@ -108,8 +125,16 @@ class Variant {
     );
   }
 
-  /** Learns from, or confirms with, a response Next.js served. */
-  study(sample: Parameters<typeof learn>[0], response: Head): void {
+  /**
+   * Learns from, or confirms with, a response Next.js served. The page's `metadata`, if it has any,
+   * stays part of the wrapper while the params explain it, so any request can be served; only a
+   * wrapper that can't be confirmed otherwise takes it per request.
+   */
+  study(sample: Sample, response: Head, metadata?: Fragment): void {
+    const withMetadata = (s: Sample, m: Fragment): Sample => ({
+      ...s,
+      fragments: [...s.fragments, m],
+    });
     if (!this.template) {
       const learned = learn(sample);
       if (!learned.ok) {
@@ -119,24 +144,40 @@ class Variant {
       this.template = learned.template;
       this.head = { status: response.status, headers: response.headers };
       this.status = { state: "learned", params: sample.params };
+      this.first = metadata && { sample, metadata };
       return;
     }
     if (JSON.stringify(response.headers) !== JSON.stringify(this.head?.headers)) {
       this.refuse("Next.js's headers differ between requests");
       return;
     }
-    const result = confirm(this.template, sample);
+    const perRequest = fragmentNames(this.template).has("metadata");
+    let result = confirm(
+      this.template,
+      perRequest && metadata ? withMetadata(sample, metadata) : sample,
+    );
+    if (!result.ok && !perRequest && this.first && metadata) {
+      const relearned = learn(withMetadata(this.first.sample, this.first.metadata));
+      if (relearned.ok) {
+        const again = confirm(relearned.template, withMetadata(sample, metadata));
+        if (again.ok) result = again;
+      }
+    }
     if (!result.ok) {
       this.refuse(result.reason);
       return;
     }
     this.template = result.template;
-    if (confirmed(result.template)) this.status = { state: "served" };
+    if (confirmed(result.template)) {
+      this.status = { state: "served" };
+      this.first = undefined;
+    }
   }
 
   refuse(reason: string): void {
     this.status = { state: "refused", reason };
     this.template = undefined;
+    this.first = undefined;
   }
 }
 
@@ -147,6 +188,7 @@ export class Route {
   private refused: string | undefined;
   private readonly variants = new Map<string, Variant>();
   private readonly islands = new IslandCache();
+  private readonly metadata = new MetadataCache();
   private readonly render: Renderer;
   /** Next.js's `compression` middleware, as `next start` applies it (unless `compress: false`). */
   private readonly compress: Compress | undefined;
@@ -205,17 +247,22 @@ export class Route {
       await next(req, res);
       return;
     }
+    // The metadata learned for this request, if the wrapper is filled with it (ADR-0022).
+    const metadata = this.metadata.get(url);
     const values = {
       params: request.params,
       pathname: request.pathname,
       search: request.search,
-      fragments: Object.fromEntries(fragments.map((f) => [f.name, f])),
+      fragments: Object.fromEntries(
+        [...fragments, ...(metadata ? [metadata] : [])].map((f) => [f.name, f]),
+      ),
     };
     if (
       pending === undefined &&
       variant.template &&
       variant.head &&
-      variant.canFill(request.params)
+      variant.canFill(request.params) &&
+      (metadata || !fragmentNames(variant.template).has("metadata"))
     ) {
       const body = fill(variant.template, values);
       if (this.compress) {
@@ -249,14 +296,13 @@ export class Route {
           f.name === "page" ? { name: f.name, html: islands.html, flight: islands.flight } : f,
         );
       }
-      learning.study(
-        {
-          document: response.body,
-          ...values,
-          fragments: learned,
-        },
-        response,
-      );
+      const found = findMetadata(response.body);
+      if (typeof found === "string") {
+        learning.refuse(found);
+        return;
+      }
+      this.metadata.set(url, found ?? null);
+      learning.study({ document: response.body, ...values, fragments: learned }, response, found);
     });
   }
 }

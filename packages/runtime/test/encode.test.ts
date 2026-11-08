@@ -293,6 +293,28 @@ describe("node", () => {
   });
 });
 
+describe("component elements", () => {
+  it("names the component React renders instead", () => {
+    const reason = (type: unknown) => {
+      try {
+        node(new Input(), { $$typeof: Symbol.for("react.transitional.element"), type, props: {} });
+      } catch (error) {
+        return (error as Error).message;
+      }
+      return "";
+    };
+    function ProductGallery() {
+      return null;
+    }
+    expect(reason(ProductGallery)).toBe(
+      "a component element (<ProductGallery>), rendered by React for now",
+    );
+    expect(reason(Object.assign(() => null, { displayName: "Shown" }))).toContain("<Shown>");
+    expect(reason(Symbol.for("react.suspense"))).toContain("<suspense>");
+    expect(reason({ $$typeof: Symbol.for("react.memo") })).toContain("<memo>");
+  });
+});
+
 describe("islands", () => {
   it("asks the resolver for each island, and refuses without one", () => {
     const seen: [number, Record<string, unknown>][] = [];

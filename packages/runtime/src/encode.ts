@@ -240,6 +240,25 @@ function isElement(v: unknown): v is Element {
   return v !== null && typeof v === "object" && (v as { $$typeof?: unknown }).$$typeof === ELEMENT;
 }
 
+/** A component element's type as a name for reasons: `Suspense`, `ProductGallery`, … */
+function componentName(type: unknown): string {
+  if (typeof type === "function") {
+    const named = type as { displayName?: unknown; name?: unknown };
+    if (typeof named.displayName === "string" && named.displayName !== "") return named.displayName;
+    if (typeof named.name === "string" && named.name !== "") return named.name;
+    return "anonymous";
+  }
+  if (typeof type === "symbol") return (type.description ?? "").replace(/^react\./, "") || "symbol";
+  if (type !== null && typeof type === "object") {
+    // `memo`, `forwardRef`, `lazy`, context providers: React's own objects.
+    const tag = (type as { $$typeof?: unknown }).$$typeof;
+    return typeof tag === "symbol"
+      ? (tag.description ?? "object").replace(/^react\./, "")
+      : "object";
+  }
+  return typeof type;
+}
+
 /** `Op::Child`: a React node. Host elements are element nodes (ADR-0007). */
 export function node(w: Input, v: unknown): void {
   if (Array.isArray(v)) {
@@ -248,7 +267,10 @@ export function node(w: Input, v: unknown): void {
     for (const item of v) node(w, item);
   } else if (isElement(v)) {
     if (typeof v.type !== "string") {
-      throw new NotNative("a component element, rendered by React for now", v);
+      throw new NotNative(
+        `a component element (<${componentName(v.type)}>), rendered by React for now`,
+        v,
+      );
     }
     w.u8(TAG.element);
     w.string(v.type);

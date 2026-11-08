@@ -95,8 +95,10 @@ describe.each([
     // Server components only: not the client `Counter`.
     expect(registered).toEqual([
       "app/components/price.tsx",
+      "app/m/[n]/page.tsx",
       "app/p/[n]/page.tsx",
       "app/q/[n]/page.tsx",
+      "app/t/[n]/page.tsx",
     ]);
     // The page without client components encodes natively.
     expect(results.find((r) => r.page === "app/q/[n]/page.tsx")?.input?.length).toBeGreaterThan(0);

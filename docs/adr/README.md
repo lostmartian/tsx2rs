@@ -27,5 +27,6 @@ Format: [MADR](https://adr.github.io/madr/)-style. Context → Decision → Cons
 | [0019](0019-runtime-server.md) | The runtime server hands everything it doesn't serve to Next.js's own request handler | Accepted |
 | [0020](0020-islands.md) | Client component islands are learned from Next.js's responses | Accepted |
 | [0021](0021-supported-nextjs-version.md) | One supported Next.js version, moved deliberately | Accepted |
+| [0022](0022-metadata-per-request.md) | A page's metadata is learned per request when the params don't explain it | Accepted |
 
 Background research (benchmarks, spikes, the full decision history before this repository existed) lives in the separate `tsx2rs-lab` repository.
