@@ -456,6 +456,9 @@ export function renderer(route: CompiledRoute, dir: string, manifestDir: string)
     const record = await entry(props);
     const input = encode(record, callees, parts?.islands, parts?.boundaries);
     const out = program.render(Buffer.from(input.buffer, input.byteOffset, input.byteLength));
+    if (out.rows.length > 0) {
+      throw new Error("the page's Flight has rows of their own (not yet served by tsx2rs)");
+    }
     if (out.head !== "" || out.hints !== "") {
       throw new Error("the page hoists into <head> (not yet served by tsx2rs)");
     }

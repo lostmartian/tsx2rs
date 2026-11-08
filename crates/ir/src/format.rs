@@ -17,7 +17,9 @@
 //! deterministic.
 
 use crate::attribute::{ElementRules, Kind};
-use crate::{ChunkId, FormatError, Op, OpIndex, PROGRAM_FORMAT_VERSION, Program, TemplateId};
+use crate::{
+    ChunkId, FormatError, MarkKind, Op, OpIndex, PROGRAM_FORMAT_VERSION, Program, TemplateId,
+};
 
 /// The first bytes of every program file.
 pub const MAGIC: &[u8; 8] = b"TSX2RSP\0";
@@ -39,6 +41,7 @@ const STYLE: u8 = 13;
 const CALL: u8 = 14;
 const HTML_OUTPUT: u8 = 15;
 const END_HTML_OUTPUT: u8 = 16;
+const MARK: u8 = 17;
 
 impl Program {
     /// Encodes the program in the binary format.
@@ -135,6 +138,13 @@ fn encode_op(out: &mut Vec<u8>, op: Op) {
         Op::Island => out.push(ISLAND),
         Op::HtmlOutput => out.push(HTML_OUTPUT),
         Op::EndHtmlOutput => out.push(END_HTML_OUTPUT),
+        Op::Mark { kind } => {
+            out.push(MARK);
+            out.push(match kind {
+                MarkKind::Component => 0,
+                MarkKind::Async => 1,
+            });
+        }
         Op::Loop { end, separator } => {
             out.push(LOOP);
             out.extend_from_slice(&end.0.to_le_bytes());
@@ -208,6 +218,18 @@ fn decode_op(r: &mut Reader<'_>) -> Result<Op, FormatError> {
         ISLAND => Op::Island,
         HTML_OUTPUT => Op::HtmlOutput,
         END_HTML_OUTPUT => Op::EndHtmlOutput,
+        MARK => Op::Mark {
+            kind: match r.u8()? {
+                0 => MarkKind::Component,
+                1 => MarkKind::Async,
+                _ => {
+                    return Err(FormatError::BadOpcode {
+                        offset: at,
+                        opcode: MARK,
+                    });
+                }
+            },
+        },
         LOOP => {
             let end = OpIndex(r.u32()?);
             let separator = r.u32()?.checked_sub(1).map(ChunkId);

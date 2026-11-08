@@ -14,12 +14,14 @@ mod hints;
 mod html;
 mod input;
 mod js;
+mod outline;
 mod render;
 mod script;
 mod style;
 
 pub use head::Head;
 pub use hints::Hints;
+pub use outline::{OutlineError, outline};
 pub use render::{MAX_VALUE_DEPTH, Output, render};
 pub use script::script_string;
 

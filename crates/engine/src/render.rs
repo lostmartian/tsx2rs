@@ -11,7 +11,7 @@ use crate::{RenderError, flight, html, style};
 use element::Context;
 use tsx2rs_ir::attribute::{self, ElementRules, Kind, Prop};
 use tsx2rs_ir::input::{html_output, island, tag};
-use tsx2rs_ir::{ChunkId, Op, Program, TemplateId};
+use tsx2rs_ir::{ChunkId, MarkKind, Op, Program, TemplateId};
 
 /// The outputs of a render. Reuse one `Output` across renders (after [`Output::clear`]) to
 /// avoid allocating per request.
@@ -25,6 +25,9 @@ pub struct Output {
     /// The Flight (RSC) payload text for the rendered template, not yet split into rows or
     /// escaped for a `<script>` (see [`crate::script_string`]).
     pub flight: Vec<u8>,
+    /// Where server components' outputs start in [`Output::flight`] (`Op::Mark`), for
+    /// [`crate::outline`].
+    pub marks: Vec<(usize, MarkKind)>,
     /// What React DOM hoists into the document's `<head>` (ADR-0010). It accumulates across
     /// renders for one request, with React's deduplication.
     pub head: Head,
@@ -46,6 +49,7 @@ impl Output {
         self.html.clear();
         self.segments.clear();
         self.flight.clear();
+        self.marks.clear();
         self.head.clear();
         self.hints.clear();
     }
@@ -185,6 +189,7 @@ impl<'p> Renderer<'p, '_> {
                 Op::Child => self.child(input, depth, context)?,
                 Op::Island => self.island(input)?,
                 Op::HtmlOutput => self.open_output(input)?,
+                Op::Mark { kind } => self.out.marks.push((self.out.flight.len(), kind)),
                 Op::EndHtmlOutput => self.close_output(input)?,
                 Op::Loop { end, separator } => {
                     let count = input.u32()?;
@@ -492,6 +497,10 @@ impl<'p> Renderer<'p, '_> {
                         template: id,
                     });
                 }
+                // A compiled component's output: React checks here whether to defer it.
+                self.out
+                    .marks
+                    .push((self.out.flight.len(), MarkKind::Component));
                 self.call(TemplateId(id), input, depth, offset, context)?;
             }
             // React rejects any other object as a node, so the encoder never writes one.

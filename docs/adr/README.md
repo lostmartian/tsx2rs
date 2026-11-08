@@ -30,5 +30,6 @@ Format: [MADR](https://adr.github.io/madr/)-style. Context → Decision → Cons
 | [0022](0022-metadata-per-request.md) | A page's metadata is learned per request when the params don't explain it | Accepted |
 | [0023](0023-per-request-wrappers.md) | A wrapper that depends on the request is kept per URL | Accepted |
 | [0024](0024-suspense-boundaries.md) | Suspense boundaries are compiled, and their form is learned from Next.js | Accepted |
+| [0025](0025-flight-rows.md) | The engine splits Flight into rows as React does, and async components are compiled | Accepted |
 
 Background research (benchmarks, spikes, the full decision history before this repository existed) lives in the separate `tsx2rs-lab` repository.

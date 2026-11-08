@@ -122,8 +122,12 @@ pub struct Rendered {
     pub html: String,
     /// The HTML of pending `<Suspense>` boundaries' content, which React sends after the shell.
     pub segments: String,
-    /// The Flight model, not yet split into rows or escaped for a `<script>`.
+    /// The Flight model of the page's own row, not yet escaped for a `<script>`.
     pub flight: String,
+    /// The rows React defers parts of the page to (ADR-0025), in React's task order. A reference
+    /// to one is written `"$L!<n>"`, `n` counting from 1, for the runtime to replace with the id
+    /// Next.js gave it.
+    pub rows: Vec<String>,
     /// What React DOM hoists into `<head>`, in its order (empty if nothing).
     pub head: String,
     /// The Flight resource hint rows (`:HL`, `:Hm`), which go before the Flight rows.
@@ -157,6 +161,10 @@ impl TemplateProgram {
         let mut output = Output::new();
         render(&self.program, &input, &mut output)
             .map_err(|e| napi::Error::from_reason(format!("render failed: {e}")))?;
+        let mut rows = tsx2rs_engine::outline(&output.flight, &output.marks)
+            .map_err(|e| napi::Error::from_reason(format!("render failed: {e}")))?
+            .into_iter();
+        let flight = rows.next().unwrap_or_default();
         let mut head = Vec::new();
         output.head.write(&mut head);
         let text = |bytes: Vec<u8>| {
@@ -166,7 +174,8 @@ impl TemplateProgram {
         Ok(Rendered {
             html: text(output.html)?,
             segments: text(output.segments)?,
-            flight: text(output.flight)?,
+            flight: text(flight)?,
+            rows: rows.map(text).collect::<napi::Result<_>>()?,
             head: text(head)?,
             hints: text(output.hints.rows().to_vec())?,
         })

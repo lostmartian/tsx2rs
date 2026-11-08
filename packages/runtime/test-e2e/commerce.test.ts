@@ -135,7 +135,7 @@ describe("Commerce", () => {
     for (const route of ["/", "/product/[handle]", "/product-streaming/[handle]"]) {
       expect(states[route]).toMatchObject({
         state: "refused",
-        reason: expect.stringMatching(/^tsx2rs can't render it: a /) as string,
+        reason: expect.stringMatching(/^tsx2rs can't render it: /) as string,
       });
     }
   });
