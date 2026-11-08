@@ -6,6 +6,7 @@ import {
   NO_KEYS,
   NotNative,
   attrs,
+  boundary,
   call,
   html,
   island,
@@ -339,6 +340,23 @@ describe("islands", () => {
         html(w, "<a>");
       }),
     ).toEqual([...str("<a>"), 0]);
+  });
+});
+
+describe("boundaries", () => {
+  it("asks the resolver for each boundary, and refuses without one", () => {
+    const pending = {
+      ref: "$b",
+      pending: true,
+      open: '<!--$?--><template id="B:1"></template>',
+      close: "<!--/$-->",
+      segment: '<div hidden id="S:1">',
+      end: "</div>",
+    };
+    expect(boundary(() => pending)).toBe(pending);
+    expect(() => boundary(undefined)).toThrow(
+      new NotNative("a Suspense boundary, not learned yet", null),
+    );
   });
 });
 

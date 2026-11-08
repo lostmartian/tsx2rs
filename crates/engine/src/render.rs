@@ -10,7 +10,7 @@ use crate::input::{Input, Primitive};
 use crate::{RenderError, flight, html, style};
 use element::Context;
 use tsx2rs_ir::attribute::{self, ElementRules, Kind, Prop};
-use tsx2rs_ir::input::{island, tag};
+use tsx2rs_ir::input::{html_output, island, tag};
 use tsx2rs_ir::{ChunkId, Op, Program, TemplateId};
 
 /// The outputs of a render. Reuse one `Output` across renders (after [`Output::clear`]) to
@@ -19,6 +19,9 @@ use tsx2rs_ir::{ChunkId, Op, Program, TemplateId};
 pub struct Output {
     /// The HTML.
     pub html: Vec<u8>,
+    /// The HTML of pending `<Suspense>` boundaries' content ([`Op::HtmlOutput`]), which React
+    /// sends after the shell: each segment with its markers, in order.
+    pub segments: Vec<u8>,
     /// The Flight (RSC) payload text for the rendered template, not yet split into rows or
     /// escaped for a `<script>` (see [`crate::script_string`]).
     pub flight: Vec<u8>,
@@ -41,6 +44,7 @@ impl Output {
     /// Empties the outputs, keeping their capacity: the start of a new request.
     pub fn clear(&mut self) {
         self.html.clear();
+        self.segments.clear();
         self.flight.clear();
         self.head.clear();
         self.hints.clear();
@@ -79,8 +83,14 @@ pub(crate) fn render_after(
         program,
         out: output,
         last_text: text_before,
+        outputs: Vec::new(),
     };
     renderer.run(program.ops(), &mut input, 0, Context::BODY)?;
+    if !renderer.outputs.is_empty() {
+        return Err(RenderError::UnbalancedHtmlOutput {
+            offset: input.offset(),
+        });
+    }
     if !input.is_empty() {
         return Err(RenderError::TrailingInput {
             offset: input.offset(),
@@ -95,6 +105,18 @@ struct Renderer<'p, 'o> {
     /// Whether the last thing written to HTML was a non-empty text node (React's
     /// `textEmbedded`): the next text node then needs a `<!-- -->` separator.
     last_text: bool,
+    /// Open [`Op::HtmlOutput`]s, innermost last.
+    outputs: Vec<Saved>,
+}
+
+/// What an [`Op::HtmlOutput`] set aside, to restore at its end.
+enum Saved {
+    /// HTML kept going where it was.
+    Inline,
+    /// HTML went to the segments output: the HTML set aside, and its separator state.
+    Segments(Vec<u8>, bool),
+    /// HTML went nowhere: the HTML set aside, and its separator state.
+    Nowhere(Vec<u8>, bool),
 }
 
 struct LoopFrame {
@@ -162,6 +184,8 @@ impl<'p> Renderer<'p, '_> {
                 Op::Value => self.value(input, 0)?,
                 Op::Child => self.child(input, depth, context)?,
                 Op::Island => self.island(input)?,
+                Op::HtmlOutput => self.open_output(input)?,
+                Op::EndHtmlOutput => self.close_output(input)?,
                 Op::Loop { end, separator } => {
                     let count = input.u32()?;
                     if count == 0 {
@@ -311,6 +335,56 @@ impl<'p> Renderer<'p, '_> {
             self.last_text = flags & island::TEXT_END != 0;
         }
         Ok(())
+    }
+
+    /// `Op::HtmlOutput`: sends HTML where the input says until the matching end.
+    fn open_output(&mut self, input: &mut Input<'_>) -> Result<(), RenderError> {
+        let offset = input.offset();
+        let saved = match input.u8()? {
+            html_output::INLINE => Saved::Inline,
+            html_output::SEGMENTS => {
+                // A pending boundary inside another's content is sent after it: not supported yet.
+                if !self.inline() {
+                    return Err(RenderError::UnsupportedBoundary { offset });
+                }
+                let segments = std::mem::take(&mut self.out.segments);
+                Saved::Segments(
+                    std::mem::replace(&mut self.out.html, segments),
+                    std::mem::replace(&mut self.last_text, false),
+                )
+            }
+            html_output::NONE => Saved::Nowhere(std::mem::take(&mut self.out.html), self.last_text),
+            value => return Err(RenderError::BadHtmlOutput { offset, value }),
+        };
+        self.outputs.push(saved);
+        Ok(())
+    }
+
+    /// `Op::EndHtmlOutput`: HTML goes where it went before.
+    fn close_output(&mut self, input: &Input<'_>) -> Result<(), RenderError> {
+        match self.outputs.pop() {
+            Some(Saved::Inline) => {}
+            Some(Saved::Segments(html, last_text)) => {
+                self.out.segments = std::mem::replace(&mut self.out.html, html);
+                self.last_text = last_text;
+            }
+            Some(Saved::Nowhere(html, last_text)) => {
+                self.out.html = html;
+                self.last_text = last_text;
+            }
+            None => {
+                return Err(RenderError::UnbalancedHtmlOutput {
+                    offset: input.offset(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether HTML goes to the shell: no pending or discarded boundary is open. React writes
+    /// hoistables found elsewhere with their segment, which this engine doesn't do yet.
+    pub(crate) fn inline(&self) -> bool {
+        self.outputs.iter().all(|s| matches!(s, Saved::Inline))
     }
 
     /// Runs a template where it's called, one level deeper, in the caller's context.

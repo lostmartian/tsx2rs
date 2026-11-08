@@ -102,6 +102,30 @@ pub enum RenderError {
         /// Where the too-deep value starts.
         offset: usize,
     },
+    /// An [`Op::HtmlOutput`](tsx2rs_ir::Op::HtmlOutput) byte that isn't one of
+    /// `tsx2rs_ir::input::html_output`.
+    #[error("bad HTML output {value} at byte {offset}")]
+    BadHtmlOutput {
+        /// Where the byte is.
+        offset: usize,
+        /// The byte.
+        value: u8,
+    },
+    /// [`Op::HtmlOutput`](tsx2rs_ir::Op::HtmlOutput)s that don't match their ends (a bug in the
+    /// compiler).
+    #[error("unbalanced HTML outputs at byte {offset}")]
+    UnbalancedHtmlOutput {
+        /// Where the input was.
+        offset: usize,
+    },
+    /// What this engine doesn't render inside a pending or discarded `<Suspense>` boundary yet:
+    /// another pending boundary, or a hoistable (`<title>`, an image preload), which React writes
+    /// with the boundary's segment. The request falls back.
+    #[error("unsupported inside a Suspense boundary at byte {offset}")]
+    UnsupportedBoundary {
+        /// Where the input was.
+        offset: usize,
+    },
     /// Input left after the program finished: the encoder and the program disagree.
     #[error("input left over at byte {offset}")]
     TrailingInput {

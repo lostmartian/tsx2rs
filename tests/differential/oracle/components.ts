@@ -54,7 +54,9 @@ type Slot =
     }
   | { pl: Slot[] }
   /** A client component island (ADR-0020): learned from Next.js, which this oracle isn't. */
-  | { i: 1 };
+  | { i: 1 }
+  /** A `<Suspense>` boundary (ADR-0024): its form is learned from Next.js, which this oracle isn't. */
+  | { su: 1 };
 
 interface Plan {
   /** The entry's data function: its module, and its name. */
@@ -400,6 +402,8 @@ class Resolver {
       this.record(slot.pl, v as unknown[], { path: null, implicit: false });
     } else if ("i" in slot) {
       throw new Unsupported("a client component island (checked against Next.js instead)");
+    } else if ("su" in slot) {
+      throw new Unsupported("a Suspense boundary (checked against Next.js instead)");
     }
   }
 }

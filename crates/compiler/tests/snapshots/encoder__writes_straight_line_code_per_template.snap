@@ -3,15 +3,15 @@ source: crates/compiler/tests/encoder.rs
 expression: encoder.source
 ---
 // tsx2rs encoder (generated): writes the records as the engine's input (ADR-0016).
-import { ENTRY_KEYS, NO_KEYS, Input, attrs, call, html, island, node, primitive, reference, rootKey, style, value } from "@tsx2rs/runtime/encode";
+import { ENTRY_KEYS, NO_KEYS, Input, attrs, boundary, call, html, island, node, primitive, reference, rootKey, style, value } from "@tsx2rs/runtime/encode";
 
-export function encode(record, data, islands) {
+export function encode(record, data, islands, boundaries) {
   const w = new Input();
-  t0(w, record, ENTRY_KEYS, data, islands);
+  t0(w, record, ENTRY_KEYS, data, islands, boundaries);
   return w.finish();
 }
 
-function t0(w, r, k, data, islands) {
+function t0(w, r, k, data, islands, boundaries) {
   const [ret1, rec2] = r[0];
   if (ret1 === 0) {
     w.condition(true);
@@ -62,7 +62,7 @@ function t0(w, r, k, data, islands) {
       const branch16 = el15[1];
       w.condition(branch16[0]);
       if (branch16[0]) {
-        call(w, NO_KEYS, branch16[1][0], data[1], (w, r, k) => t1(w, r, k, data, islands));
+        call(w, NO_KEYS, branch16[1][0], data[1], (w, r, k) => t1(w, r, k, data, islands, boundaries));
       }
       else {
         node(w, branch16[1][0]);
@@ -90,22 +90,33 @@ function t0(w, r, k, data, islands) {
     primitive(w, el21[0]);
     value(w, el21[1]);
     html(w, island22.before);
+    const el23 = el4[12];
+    const boundary24 = boundary(boundaries);
+    reference(w, boundary24.ref);
+    primitive(w, el23[0]);
+    html(w, boundary24.open);
+    w.u8(boundary24.pending ? 0 : 2);
+    html(w, boundary24.close);
+    w.u8(boundary24.pending ? 1 : 0);
+    html(w, boundary24.segment);
+    node(w, el23[2]);
+    html(w, boundary24.end);
     w.condition(wrap3);
   }
 }
 
-function t1(w, r, k, data, islands) {
-  const wrap23 = k.implicit && r[0][0] !== null;
-  w.condition(wrap23);
-  const el24 = r[0];
-  primitive(w, rootKey(k, el24[0]));
-  const branch25 = el24[1];
-  w.condition(branch25[0]);
-  if (branch25[0]) {
-    call(w, NO_KEYS, branch25[1][0], data[1], (w, r, k) => t1(w, r, k, data, islands));
+function t1(w, r, k, data, islands, boundaries) {
+  const wrap25 = k.implicit && r[0][0] !== null;
+  w.condition(wrap25);
+  const el26 = r[0];
+  primitive(w, rootKey(k, el26[0]));
+  const branch27 = el26[1];
+  w.condition(branch27[0]);
+  if (branch27[0]) {
+    call(w, NO_KEYS, branch27[1][0], data[1], (w, r, k) => t1(w, r, k, data, islands, boundaries));
   }
   else {
-    node(w, branch25[1][0]);
+    node(w, branch27[1][0]);
   }
-  w.condition(wrap23);
+  w.condition(wrap25);
 }

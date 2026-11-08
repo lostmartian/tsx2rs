@@ -130,6 +130,23 @@ pub enum Slot {
     /// Whether React's Flight wraps the root element in an array (ADR-0008), computed by the
     /// runtime; read once before the element and once after it.
     RootWrap,
+    /// A `<Suspense>` boundary (ADR-0024). Its value is `[key, fallback, ...record]`: the key as
+    /// React's `jsx` takes it, the fallback's record (empty without a fallback), then the
+    /// children's record. Flight is React's element tuple with the boundary's reference as its type
+    /// (`Op::Value`, then the key) and `fallback` and `children` props. HTML is the runtime's
+    /// markers (`Op::Island`) around the fallback and the children, each in the output
+    /// (`Op::HtmlOutput`) the boundary's form needs: resolved, the children inline and no
+    /// fallback; pending, the fallback inline and the children in the segments output.
+    Suspense {
+        /// The key as written.
+        key: Option<Key>,
+        /// The fallback's record, if it has a `fallback` prop.
+        fallback: Option<Vec<Self>>,
+        /// The children's record.
+        record: Vec<Self>,
+        /// The element.
+        span: Range,
+    },
     /// A client component element (ADR-0020): React renders its HTML, which the runtime learns
     /// from Next.js, around its children, which are native. Its value is `[key, props,
     /// ...record]` (as for a spread element, `__tsx2rs_el`): the key as React's `jsx` takes it,
@@ -322,6 +339,12 @@ struct SlotArg {
     record: Option<Vec<Slot>>,
 }
 
+/// A `<Suspense>` boundary's props, as the compiler lowers them.
+struct SuspenseProps {
+    /// Its `fallback`, as a node, if it has one.
+    fallback: Option<Node>,
+}
+
 /// What a component element links to.
 struct Callee<'g> {
     module: ModuleId,
@@ -374,6 +397,42 @@ impl<'g> Link<'g> {
             props.push(prop.clone());
         }
         Some((source, export, props))
+    }
+
+    /// Whether `element` is a `<Suspense>` boundary this compiler lowers (ADR-0024), with its
+    /// fallback as a node: a module-level binding of React's `Suspense`, no props but `fallback`.
+    fn suspense(&self, element: &ComponentElement) -> Option<SuspenseProps> {
+        if !element.module_scope {
+            return None;
+        }
+        let tag = (&element.name, element.member.as_deref());
+        if usage::component(self.graph, self.from(), tag.0, tag.1)
+            != usage::Component::React("Suspense")
+        {
+            return None;
+        }
+        let mut fallback = None;
+        for prop in &element.props {
+            let node = match prop {
+                ComponentProp::Slot { name, template } if name == "fallback" => template.clone(),
+                ComponentProp::Value(Prop::Static { name, value }) if name == "fallback" => {
+                    match value {
+                        Value::String(s) => Node::Text(s.clone()),
+                        Value::Number(n) => Node::Number(*n),
+                        Value::Bool(b) => Node::Literal(Literal::Bool(*b)),
+                        Value::Null => Node::Literal(Literal::Null),
+                    }
+                }
+                ComponentProp::Value(Prop::Dynamic { name, value }) if name == "fallback" => {
+                    Node::Hole(*value)
+                }
+                _ => return None,
+            };
+            if fallback.replace(node).is_some() {
+                return None;
+            }
+        }
+        Some(SuspenseProps { fallback })
     }
 
     /// The module whose source is being lowered.
@@ -535,6 +594,21 @@ impl Lowering<'_> {
         record: &mut Vec<Slot>,
         root: bool,
     ) {
+        let suspense = if root {
+            None
+        } else {
+            self.link.as_ref().and_then(|link| link.suspense(element))
+        };
+        if let Some(props) = suspense {
+            let mark = self.mark();
+            if let Ok(slot) = self.suspense(element, props.fallback.as_ref()) {
+                record.push(slot);
+            } else {
+                self.undo(mark);
+                self.child(element.span, record);
+            }
+            return;
+        }
         let island = if root {
             None
         } else {
@@ -585,6 +659,48 @@ impl Lowering<'_> {
             self.undo(mark);
             self.child(element.span, record);
         }
+    }
+
+    /// A `<Suspense>` boundary (ADR-0024): Flight as React writes the element; HTML in the
+    /// outputs and between the markers the runtime gives for the boundary's form.
+    fn suspense(
+        &mut self,
+        element: &ComponentElement,
+        fallback: Option<&Node>,
+    ) -> Result<Slot, LowerError> {
+        self.structure(b"", br#"["$","#);
+        self.op(Op::Value); // the reference
+        self.structure(b"", b",");
+        self.op(Op::Value); // the key
+        self.structure(b"", b",{");
+        self.op(Op::Island); // the opening marker
+        let fallback = match fallback {
+            Some(node) => {
+                self.structure(b"", br#""fallback":"#);
+                let mut record = Vec::new();
+                self.op(Op::HtmlOutput);
+                self.node(node, &mut record)?;
+                self.op(Op::EndHtmlOutput);
+                self.structure(b"", b",");
+                Some(record)
+            }
+            None => None,
+        };
+        self.op(Op::Island); // the end of the shell's part
+        self.structure(b"", br#""children":"#);
+        let mut record = Vec::new();
+        self.op(Op::HtmlOutput);
+        self.op(Op::Island); // the segment's start
+        self.children_value(&element.children, &mut record)?;
+        self.op(Op::Island); // the end
+        self.op(Op::EndHtmlOutput);
+        self.structure(b"", b"}]");
+        Ok(Slot::Suspense {
+            key: element.key.clone(),
+            fallback,
+            record,
+            span: element.span,
+        })
     }
 
     /// A client component element as an island (ADR-0020): in Flight, React's element tuple with

@@ -247,6 +247,13 @@ fn product_page_links() {
                     out.push(format!("island {source}"));
                     calls(graph, record, out);
                 }
+                Slot::Suspense {
+                    fallback, record, ..
+                } => {
+                    out.push("suspense".to_owned());
+                    calls(graph, fallback.as_deref().unwrap_or_default(), out);
+                    calls(graph, record, out);
+                }
                 Slot::Branch {
                     then, otherwise, ..
                 } => {

@@ -12,6 +12,7 @@
 //! | [`Op::If`](crate::Op::If) | `u8`: 0 false, 1 true |
 //! | [`Op::Loop`](crate::Op::Loop) | `u32` LE count |
 //! | [`Op::Island`](crate::Op::Island) | string (React's HTML), then a flags byte ([`island::TEXT_START`], [`island::TEXT_END`]) |
+//! | [`Op::HtmlOutput`](crate::Op::HtmlOutput) | `u8`: one of [`html_output`] |
 //! | [`Op::Value`](crate::Op::Value) | a tagged value: any [`tag`] (including [`tag::REFERENCE`]), arrays as `u32` count + values, objects as `u32` count + (string key, value) pairs |
 //! | [`Op::Child`](crate::Op::Child) | a tagged node: [`tag::UNDEFINED`], [`tag::NULL`], [`tag::FALSE`], [`tag::TRUE`], [`tag::NUMBER`], [`tag::STRING`], [`tag::BIGINT`], [`tag::ARRAY`] with `u32` count + nodes, [`tag::ELEMENT`] (below), or [`tag::TEMPLATE`] with a `u32` template index + that template's input |
 //!
@@ -57,6 +58,16 @@ pub mod tag {
     /// then lowercase hex digits (`$L15`, `$3`, `$@a`). Written as it is, without React's `$`
     /// escape: a client component's type is one (ADR-0020). Only `Op::Value` reads it.
     pub const REFERENCE: u8 = 11;
+}
+
+/// Where [`Op::HtmlOutput`](crate::Op::HtmlOutput) sends HTML (one byte).
+pub mod html_output {
+    /// Where it was going: a resolved `<Suspense>` boundary's content.
+    pub const INLINE: u8 = 0;
+    /// The segments output: a pending boundary's content, which React sends after the shell.
+    pub const SEGMENTS: u8 = 1;
+    /// Nowhere: a fallback React doesn't render (its boundary resolved).
+    pub const NONE: u8 = 2;
 }
 
 /// Flags for [`Op::Island`](crate::Op::Island): the island's HTML begins / ends with text.
@@ -117,6 +128,12 @@ impl InputWriter {
     /// If the count is larger than `u32::MAX`.
     pub fn count(&mut self, n: usize) -> &mut Self {
         self.length(n);
+        self
+    }
+
+    /// Where HTML goes (for `HtmlOutput`): one of [`html_output`].
+    pub fn html_output(&mut self, output: u8) -> &mut Self {
+        self.bytes.push(output);
         self
     }
 

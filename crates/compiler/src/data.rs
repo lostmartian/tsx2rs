@@ -19,6 +19,8 @@
 //!   as React runs children after their parent (ADR-0013);
 //! - a client component element (an island, ADR-0020) is `[key, props, ...record]`, as for a
 //!   spread element: its props without `children`, then its children's record;
+//! - a `<Suspense>` boundary (ADR-0024) is `[key, fallback, ...record]`: the fallback's record
+//!   (`null` without one), then its children's;
 //! - for a root element, the runtime puts the key path in front of that key and decides the
 //!   wrap (ADR-0008), which isn't in the record.
 
@@ -225,6 +227,12 @@ impl Writer<'_> {
                 record,
                 ..
             } => self.island(key.as_ref(), *key_at, props, record, tested),
+            Slot::Suspense {
+                key,
+                fallback,
+                record,
+                ..
+            } => self.suspense(key.as_ref(), fallback.as_deref(), record, tested),
         })
     }
 
@@ -336,6 +344,30 @@ impl Writer<'_> {
             entries.join(", "),
             values.join(", ")
         )
+    }
+
+    /// A `<Suspense>` boundary's `[key, fallback, ...record]`, in the order
+    /// `jsx(Suspense, { fallback, children }, key)` evaluates them.
+    fn suspense(
+        &mut self,
+        key: Option<&Key>,
+        fallback: Option<&[Slot]>,
+        record: &[Slot],
+        tested: Option<(Range, &str)>,
+    ) -> String {
+        let fallback = fallback.map_or_else(|| "null".to_owned(), |f| self.record(f, tested));
+        let values: Vec<String> = std::iter::once(fallback)
+            .chain(record.iter().filter_map(|slot| self.slot(slot, tested)))
+            .collect();
+        match key {
+            Some(Key::Dynamic(span)) => format!(
+                "__tsx2rs_keyed([{}], ({}))",
+                values.join(", "),
+                self.text(*span)
+            ),
+            Some(Key::Static(key)) => format!("[{}, {}]", json_key(key), values.join(", ")),
+            None => format!("[null, {}]", values.join(", ")),
+        }
     }
 
     /// A props object as JSX builds it: in order, spreads included.

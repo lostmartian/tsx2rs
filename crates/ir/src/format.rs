@@ -37,6 +37,8 @@ const JUMP: u8 = 11;
 const CHILD: u8 = 12;
 const STYLE: u8 = 13;
 const CALL: u8 = 14;
+const HTML_OUTPUT: u8 = 15;
+const END_HTML_OUTPUT: u8 = 16;
 
 impl Program {
     /// Encodes the program in the binary format.
@@ -131,6 +133,8 @@ fn encode_op(out: &mut Vec<u8>, op: Op) {
         Op::Child => out.push(CHILD),
         Op::Style => out.push(STYLE),
         Op::Island => out.push(ISLAND),
+        Op::HtmlOutput => out.push(HTML_OUTPUT),
+        Op::EndHtmlOutput => out.push(END_HTML_OUTPUT),
         Op::Loop { end, separator } => {
             out.push(LOOP);
             out.extend_from_slice(&end.0.to_le_bytes());
@@ -202,6 +206,8 @@ fn decode_op(r: &mut Reader<'_>) -> Result<Op, FormatError> {
         CHILD => Op::Child,
         STYLE => Op::Style,
         ISLAND => Op::Island,
+        HTML_OUTPUT => Op::HtmlOutput,
+        END_HTML_OUTPUT => Op::EndHtmlOutput,
         LOOP => {
             let end = OpIndex(r.u32()?);
             let separator = r.u32()?.checked_sub(1).map(ChunkId);

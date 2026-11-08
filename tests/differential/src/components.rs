@@ -279,6 +279,7 @@ impl Plan<'_> {
                 out.push('}');
             }
             Slot::Island { .. } => out.push_str(r#"{"i":1}"#),
+            Slot::Suspense { .. } => out.push_str(r#"{"su":1}"#),
         }
     }
 }

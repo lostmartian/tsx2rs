@@ -36,7 +36,7 @@ import {
   type Fragment,
   type Template,
 } from "./capture.ts";
-import type { Islands } from "./encode.ts";
+import type { Boundaries, Islands } from "./encode.ts";
 import { IslandCache, Miss, learnIslands, placeholders, type Call } from "./islands.ts";
 import { MetadataCache, findMetadata } from "./metadata.ts";
 
@@ -58,7 +58,12 @@ interface DataFunctionName {
 
 type DataFunction = (props: unknown) => unknown;
 type Sample = Parameters<typeof learn>[0];
-type Encode = (record: unknown, data: DataFunction[], islands?: Islands) => Uint8Array;
+type Encode = (
+  record: unknown,
+  data: DataFunction[],
+  islands?: Islands,
+  boundaries?: Boundaries,
+) => Uint8Array;
 
 /** Where a compiled route stands. */
 export type RouteState =
