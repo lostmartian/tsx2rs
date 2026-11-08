@@ -374,6 +374,12 @@ function piece(part: Part, values: Values): string {
 export function fill(template: Template, values: Values): string {
   let out = "";
   for (const unit of template.units) {
+    // A unit without slots is the same every time: encoded once.
+    const fixed = FIXED.get(unit);
+    if (fixed !== undefined) {
+      out += fixed;
+      continue;
+    }
     let text = "";
     for (const part of unit.parts) {
       if (
@@ -382,12 +388,34 @@ export function fill(template: Template, values: Values): string {
       ) {
         throw new Error(`param ${part.candidate} isn't confirmed for another value yet`);
       }
-      text += piece(part, values);
+      // Flight units are escaped part by part (JSON escaping concatenates): fixed parts once.
+      text += unit.kind === "html" ? piece(part, values) : escaped(part, values);
     }
-    out += unit.kind === "html" ? text : flightScript(unit.start, text);
+    const encoded =
+      unit.kind === "html" ? text : `${unit.start}self.__next_f.push([1,"${text}"])</script>`;
+    if (unit.parts.every((part) => "text" in part)) FIXED.set(unit, encoded);
+    out += encoded;
   }
   return out;
 }
+
+/**
+ * A Flight part's text escaped as `flightScript` escapes the chunk it's in: the body of a JSON
+ * string, then `htmlEscapeJsonString`. Parts are whole strings (located verbatim), so the pieces
+ * join to the escaped whole. A fixed part's is kept.
+ */
+function escaped(part: Part, values: Values): string {
+  const known = ESCAPED.get(part);
+  if (known !== undefined) return known;
+  const out = htmlEscapeJson(JSON.stringify(piece(part, values)).slice(1, -1));
+  if ("text" in part) ESCAPED.set(part, out);
+  return out;
+}
+
+const ESCAPED = new WeakMap<Part, string>();
+
+/** Template units without slots, as written (a template's units don't change once learned). */
+const FIXED = new WeakMap<Unit, string>();
 
 /** The names of the fragments a template is filled with. */
 export function fragmentNames(template: Template): Set<string> {

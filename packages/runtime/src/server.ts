@@ -133,11 +133,15 @@ export async function createHandler(options: Options): Promise<{
   await nextApp.prepare();
   const next = nextApp.getRequestHandler();
 
+  const decisions = Decisions.for(build.routing, build.i18n);
+
   async function decide(req: IncomingMessage): Promise<Decision> {
     if (disabled) return { fallback: disabled };
     if (req.method !== "GET" && req.method !== "HEAD")
       return { fallback: `a ${req.method ?? ""} request` };
     if (req.headers["rsc"] !== undefined) return { fallback: "a client navigation (rsc)" };
+    const known = decisions?.get(req.url ?? "/");
+    if (known) return known;
     const headers = new Headers();
     for (const [name, value] of Object.entries(req.headers)) {
       if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(", ") : value);
@@ -153,7 +157,8 @@ export async function createHandler(options: Options): Promise<{
       routes: build.routing,
       invokeMiddleware: () => Promise.resolve({}),
     });
-    return decision(resolved, compiled);
+    const decided = decision(resolved, compiled);
+    return decisions ? decisions.set(req.url ?? "/", decided) : decided;
   }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -191,6 +196,40 @@ export async function createHandler(options: Options): Promise<{
   }
 
   return { handle, decide };
+}
+
+/**
+ * Decisions kept per URL, for an app whose routing decides by the URL alone: no rule reads headers,
+ * cookies or the host (`has`, `missing`), and no locale is detected (`i18n`). Each request gets its
+ * own params and query, as Next.js gives each page. At most 10,000 URLs.
+ */
+export class Decisions {
+  private readonly known = new Map<string, Decision>();
+
+  /** Decisions for an app's routing rules, or `undefined` if they read more than the URL. */
+  static for(routing: unknown, i18n: unknown): Decisions | undefined {
+    const rules = JSON.stringify(routing);
+    const reads = rules.includes('"has"') || rules.includes('"missing"') || Boolean(i18n);
+    return reads ? undefined : new Decisions();
+  }
+
+  get(url: string): Decision | undefined {
+    const known = this.known.get(url);
+    return known && copy(known);
+  }
+
+  /** Keeps `decided` for `url`; returns it for this request. */
+  set(url: string, decided: Decision): Decision {
+    if (this.known.size >= 10_000) this.known.clear();
+    this.known.set(url, decided);
+    return copy(decided);
+  }
+}
+
+function copy(decided: Decision): Decision {
+  return "route" in decided
+    ? { ...decided, params: { ...decided.params }, query: { ...decided.query } }
+    : decided;
 }
 
 /**

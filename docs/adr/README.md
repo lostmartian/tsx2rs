@@ -34,5 +34,6 @@ Format: [MADR](https://adr.github.io/madr/)-style. Context → Decision → Cons
 | [0026](0026-object-identity.md) | Objects React has written before are written as references | Accepted |
 | [0027](0027-re-checking.md) | Served routes are re-checked against Next.js | Accepted |
 | [0028](0028-tsx2rs-start.md) | `tsx2rs start` runs the app, with a worker per core when asked | Accepted |
+| [0029](0029-memoized-formatters.md) | Data functions memoize `Intl` formatters | Accepted |
 
 Background research (benchmarks, spikes, the full decision history before this repository existed) lives in the separate `tsx2rs-lab` repository.

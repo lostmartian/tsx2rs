@@ -10,6 +10,20 @@ const __tsx2rs_el = (config, record, key) => {
   const { key: own, ...props } = config;
   return [own === undefined ? __tsx2rs_key(key) : "" + own, props, ...record];
 };
+// `new Intl.X(...args)`, memoized by its arguments when they're plain data (ADR-0029).
+const __tsx2rs_formats = new Map();
+const __tsx2rs_plain = (v) => v === undefined || v === null || ["string", "number", "boolean"].includes(typeof v) || (Array.isArray(v) ? v.every(__tsx2rs_plain) : Object.getPrototypeOf(v) === Object.prototype && Object.values(v).every(__tsx2rs_plain));
+const __tsx2rs_intl = (Type, ...args) => {
+  if (!args.every(__tsx2rs_plain)) return new Type(...args);
+  const key = Type.name + JSON.stringify(args, (_, v) => (v === undefined ? "\u0000undefined" : v));
+  let format = __tsx2rs_formats.get(key);
+  if (format === undefined) {
+    if (__tsx2rs_formats.size >= 1000) __tsx2rs_formats.clear();
+    format = new Type(...args);
+    __tsx2rs_formats.set(key, format);
+  }
+  return format;
+};
 export const __tsx2rs_data_Price = function Price({ amount, className }) {
   // setup code, kept byte for byte
   const text = fmt(amount);

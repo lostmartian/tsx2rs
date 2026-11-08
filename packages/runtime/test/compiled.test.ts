@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createGzip, gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Route, type CompiledRoute, type Renderer, type Compress } from "../src/compiled.js";
-import { decision, variant } from "../src/server.js";
+import { Decisions, decision, variant } from "../src/server.js";
 
 /** Real Next.js 16.4.5 documents for `app/q/[n]/page.tsx` (see test/next/README.md). */
 const files = [
@@ -233,6 +233,13 @@ describe("a compiled route's refusals", () => {
     expect((await get("/q/3")).compiled).toBe("compiled");
     expect(await get("/q/3")).toEqual({ compiled: null, body: docs["3"] });
     expect(route.checks).toEqual({ compared: 1, differed: 0 });
+    // A re-check Next.js answers with another status (a 404) isn't compared.
+    const missing = docs["3"] ?? "";
+    delete docs["3"];
+    expect((await get("/q/3")).compiled).toBe("compiled");
+    expect((await get("/q/3")).compiled).toBeNull();
+    expect(route.checks).toEqual({ compared: 1, differed: 0 });
+    docs["3"] = missing;
     // The layout changed since: the next re-check sees it, and the route relearns.
     const doc = docs["3"] ?? "";
     docs["3"] = doc.replace("<body>", "<body><b>new</b>");
@@ -327,7 +334,55 @@ describe("a served route's compression", () => {
     // fetch decodes the gzip itself.
     expect(res.headers.get("content-encoding")).toBe("gzip");
     expect(await res.text()).toBe(docs["1234567890123456789012345678901234567890"]);
+    // A client that accepts no encoding: Next.js's middleware wouldn't compress, so it isn't used.
+    const plain = await fetch(`${url}/q/3`, { headers: { "accept-encoding": "identity" } });
+    expect(await plain.text()).toBe(docs["3"]);
+    expect(plain.headers.get("content-encoding")).toBeNull();
+    expect(used).toBe(1);
     server.close();
+  });
+});
+
+describe("a re-check of a per-URL wrapper", () => {
+  it("forgets that URL's wrapper when Next.js's answer changed, and keeps the others", async () => {
+    const route = new Route(definition, page, undefined, 1);
+    const { server, url } = await serve(route);
+    const get = async (path: string) => {
+      const res = await fetch(url + path);
+      return { compiled: res.headers.get("x-tsx2rs"), body: await res.text() };
+    };
+    const doc = docs["7"] ?? "";
+    // Per-URL wrappers: `/q/7`'s differs from `/q/3`'s, and repeats.
+    docs["7"] = doc.replace('<html lang="en">', '<html lang="de">');
+    for (const path of ["/q/3", "/q/7", "/q/7"]) await get(path);
+    expect(route.state).toEqual({ state: "served", perRequest: true });
+    // Every served request is re-checked (1): `/q/7` changed again, so its wrapper is forgotten.
+    docs["7"] = doc.replace('<html lang="en">', '<html lang="fr">');
+    expect((await get("/q/7")).body).toBe(docs["7"]);
+    expect(route.checks).toEqual({ compared: 1, differed: 1 });
+    expect(route.state).toEqual({ state: "served", perRequest: true });
+    docs["7"] = doc;
+    server.close();
+  });
+});
+
+describe("Decisions", () => {
+  it("keeps decisions per URL only when the routing rules read nothing else", () => {
+    expect(Decisions.for({ beforeFiles: [{ has: [{ type: "cookie" }] }] }, null)).toBeUndefined();
+    expect(Decisions.for({ afterFiles: [{ missing: [] }] }, null)).toBeUndefined();
+    expect(Decisions.for({}, { locales: ["en"] })).toBeUndefined();
+    const decisions = Decisions.for({ beforeMiddleware: [] }, null);
+    expect(decisions).toBeDefined();
+    const page = { route: "/q/[n]", params: { n: "3" }, query: { x: "1" } };
+    const kept = decisions?.set("/q/3?x=1", page);
+    expect(kept).toEqual(page);
+    // Each request's own params and query.
+    const again = decisions?.get("/q/3?x=1");
+    expect(again).toEqual(page);
+    expect(again).not.toBe(page);
+    expect(again && "route" in again && again.params).not.toBe(page.params);
+    expect(decisions?.set("/nope", { fallback: "no route" })).toEqual({ fallback: "no route" });
+    expect(decisions?.get("/elsewhere")).toBeUndefined();
   });
 });
 
