@@ -219,6 +219,32 @@ describe("a compiled route's refusals", () => {
     server.close();
   });
 
+  it("re-checks every Nth request it would serve, and relearns when Next.js's answer changed", async () => {
+    const route = new Route(definition, page, undefined, 2);
+    const { server, url } = await serve(route);
+    const get = async (path: string) => {
+      const res = await fetch(url + path);
+      return { compiled: res.headers.get("x-tsx2rs"), body: await res.text() };
+    };
+    await get("/q/3");
+    await get("/q/7");
+    expect(route.state).toEqual({ state: "served" });
+    // Served, then re-checked: Next.js answers, the same.
+    expect((await get("/q/3")).compiled).toBe("compiled");
+    expect(await get("/q/3")).toEqual({ compiled: null, body: docs["3"] });
+    expect(route.checks).toEqual({ compared: 1, differed: 0 });
+    // The layout changed since: the next re-check sees it, and the route relearns.
+    const doc = docs["3"] ?? "";
+    docs["3"] = doc.replace("<body>", "<body><b>new</b>");
+    expect((await get("/q/3")).compiled).toBe("compiled");
+    expect((await get("/q/3")).body).toBe(docs["3"]);
+    expect(route.checks).toEqual({ compared: 2, differed: 1 });
+    expect(route.state).toEqual({ state: "learning" });
+    expect((await get("/q/3")).compiled).toBeNull();
+    docs["3"] = doc;
+    server.close();
+  });
+
   it("hands a request whose page calls notFound() or redirect() to Next.js, and goes on", async () => {
     const thrown = (digest: string) => Object.assign(new Error(digest), { digest });
     const route = new Route(definition, (request) =>
