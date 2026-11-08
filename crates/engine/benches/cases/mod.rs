@@ -293,7 +293,7 @@ pub(crate) fn element_values() -> Case {
     dead_code,
     reason = "the instruction counts list their cases one by one"
 )]
-pub(crate) fn all() -> [(&'static str, Case); 8] {
+pub(crate) fn all() -> [(&'static str, Case); 9] {
     [
         ("static_page", static_page()),
         ("text_list", text_list()),
@@ -303,7 +303,25 @@ pub(crate) fn all() -> [(&'static str, Case); 8] {
         ("props", props()),
         ("element_values", element_values()),
         ("calls", calls()),
+        ("commerce_product", commerce_product()),
     ]
+}
+
+/// Commerce's product page (the hoodie) as tsx2rs compiles it: its real program and one request's
+/// input, with the runtime's placeholders for islands and boundaries. Written by
+/// `packages/runtime/scripts/bench-case.ts` from a build of `tests/apps/commerce`; write them again
+/// after a change to the program or input format.
+pub(crate) fn commerce_product() -> Case {
+    let program = Program::decode(include_bytes!("commerce/program.bin")).unwrap();
+    let input = include_bytes!("commerce/input.bin").to_vec();
+    let mut out = Output::new();
+    render(&program, &input, &mut out).unwrap();
+    Case {
+        program,
+        input,
+        html_bytes: out.html.len(),
+        flight_bytes: out.flight.len(),
+    }
 }
 
 /// A Flight payload of 400 rows to escape for an inline `<script>`.
