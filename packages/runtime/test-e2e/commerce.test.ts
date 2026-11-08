@@ -123,14 +123,14 @@ describe("Commerce", () => {
       string,
       { state: string; reason?: string }
     >;
-    // Another CMS page has other metadata (and the footer menu marks another link): not
-    // explained by the params, until metadata is a fragment.
-    expect(states["/[page]"]).toMatchObject({
-      state: "refused",
-      reason: expect.stringContaining(
-        "differs in ways the params and fragments don't explain",
-      ) as string,
-    });
+    // Each CMS page's footer marks its own link: the wrapper depends on the URL, so each URL
+    // keeps its own (ADR-0023), and the pages above were served from it.
+    expect(states["/[page]"]).toMatchObject({ state: "served", perRequest: true });
+    for (const path of ["/about", "/terms-conditions", "/shipping-return-policy"]) {
+      const [n, o] = [await page(nextUrl, path), await page(oursUrl, path)];
+      expect(o.compiled).toBe("compiled");
+      expect(o.body).toBe(n.body);
+    }
     // Client components are islands, learned from Next.js's responses next (ADR-0020).
     for (const route of ["/", "/product/[handle]", "/product-streaming/[handle]"]) {
       expect(states[route]).toMatchObject({

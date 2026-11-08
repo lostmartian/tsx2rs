@@ -219,15 +219,52 @@ describe("a compiled route's refusals", () => {
     server.close();
   });
 
-  it("refuses a confirmation that differs in ways the slots don't explain", async () => {
+  it("hands a request whose page calls notFound() or redirect() to Next.js, and goes on", async () => {
+    const thrown = (digest: string) => Object.assign(new Error(digest), { digest });
+    const route = new Route(definition, (request) =>
+      request.params["n"] === "7"
+        ? Promise.reject(thrown("NEXT_HTTP_ERROR_FALLBACK;404"))
+        : request.params["n"] === "3"
+          ? Promise.reject(thrown("NEXT_REDIRECT;replace;/q/7;307;"))
+          : page(request),
+    );
+    const { server, url } = await serve(route);
+    const calls = nextCalls;
+    expect(await (await fetch(`${url}/q/7`)).text()).toBe(docs["7"]);
+    expect(await (await fetch(`${url}/q/3`)).text()).toBe(docs["3"]);
+    expect(nextCalls).toBe(calls + 2);
+    // Not refused, and nothing learned from those answers.
+    expect(route.state).toEqual({ state: "learning" });
+    server.close();
+  });
+
+  it("keeps a wrapper per request when it differs in ways the slots don't explain", async () => {
     const route = new Route(definition, page);
     const { server, url } = await serve(route);
-    await (await fetch(`${url}/q/3`)).text();
+    const get = async (path: string) => {
+      const res = await fetch(url + path);
+      return { compiled: res.headers.get("x-tsx2rs"), body: await res.text() };
+    };
     const doc = docs["7"] ?? "";
-    docs["7"] = doc.replace('<html lang="en">', '<html lang="de">');
-    await (await fetch(`${url}/q/7`)).text();
+    const german = doc.replace('<html lang="en">', '<html lang="de">');
+    await get("/q/3");
+    docs["7"] = german;
+    await get("/q/7");
+    // Not explained by the params: each URL keeps its own wrapper, once a URL's two responses
+    // have shown that Next.js answers one request the same way.
+    expect(route.state).toEqual({ state: "learning" });
+    expect(await get("/q/7")).toEqual({ compiled: null, body: german });
+    expect(route.state).toEqual({ state: "served", perRequest: true });
+    expect(await get("/q/7")).toEqual({ compiled: "compiled", body: german });
     docs["7"] = doc;
-    expect(route.state).toMatchObject({ state: "refused" });
+    expect(await get("/q/3")).toEqual({ compiled: "compiled", body: docs["3"] });
+    // A URL it hasn't seen goes to Next.js once, then it's served.
+    const long = "/q/1234567890123456789012345678901234567890";
+    expect((await get(long)).compiled).toBeNull();
+    expect(await get(long)).toEqual({
+      compiled: "compiled",
+      body: docs["1234567890123456789012345678901234567890"],
+    });
     server.close();
   });
 });
@@ -360,13 +397,15 @@ describe("variants", () => {
     await get("/q/7");
     await get("/q/3", "cart=1");
     await get("/q/7", "cart=1");
+    // The two carts differ: maybe the wrapper depends on the URL, so each keeps its own. The
+    // same URL's next response differs too, so it depends on something else: refused.
+    expect(route.states['{"cookies":["cart"],"bot":""}']).toEqual({ state: "learning" });
+    await get("/q/3", "cart=1");
     expect(route.states).toEqual({
       "": { state: "served" },
       '{"cookies":["cart"],"bot":""}': {
         state: "refused",
-        reason: expect.stringContaining(
-          "differs in ways the params and fragments don't explain",
-        ) as string,
+        reason: expect.stringContaining("two responses for one request differ") as string,
       },
     });
     expect(await get("/q/1234567890123456789012345678901234567890")).toBe("compiled");
