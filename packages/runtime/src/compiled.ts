@@ -37,7 +37,7 @@ import {
   type Template,
 } from "./capture.ts";
 import type { Boundaries, Islands } from "./encode.ts";
-import { IslandCache, Miss, learnIslands, placeholders, type Call } from "./islands.ts";
+import { IslandCache, Miss, learnPage, placeholders, type Call } from "./islands.ts";
 import { MetadataCache, findMetadata } from "./metadata.ts";
 
 /** A compiled page route in the manifest. */
@@ -314,7 +314,7 @@ export class Route {
         if (!(error instanceof Miss)) throw error;
         const learning = placeholders();
         pending = learning.calls;
-        return this.render(request, learning.islands);
+        return this.render(request, learning);
       })
       .catch((error: unknown) => {
         // `notFound()`, `redirect()`: this request's answer is Next.js's, not the route's.
@@ -369,15 +369,19 @@ export class Route {
       let learned = fragments;
       if (calls !== undefined) {
         const page = fragments.find((f) => f.name === "page");
-        const islands = page && learnIslands(response.body, page, calls);
-        if (!islands?.ok) {
-          learning.refuse(islands?.reason ?? "no page fragment");
+        const segments = fragments.find((f) => f.name === "segments")?.html ?? "";
+        const parts = page && learnPage(response.body, { ...page, segments }, calls);
+        if (!parts?.ok) {
+          learning.refuse(parts?.reason ?? "no page fragment");
           return;
         }
-        this.islands.set(url, calls, islands.islands);
-        learned = fragments.map((f) =>
-          f.name === "page" ? { name: f.name, html: islands.html, flight: islands.flight } : f,
-        );
+        this.islands.set(url, calls, parts.parts);
+        learned = [
+          { name: "page", html: parts.html, flight: parts.flight },
+          ...(parts.segments === ""
+            ? []
+            : [{ name: "segments", html: parts.segments, flight: "" }]),
+        ];
       }
       const found = findMetadata(response.body);
       if (typeof found === "string") {
@@ -395,8 +399,17 @@ export class Route {
   }
 }
 
-/** What a route renders per request: its fragments (ADR-0018), with its islands (ADR-0020). */
-export type Renderer = (request: Request, islands?: Islands) => Promise<Fragment[]>;
+/**
+ * What a route renders per request: its fragments (ADR-0018), the page and its segments (the
+ * content of pending `<Suspense>` boundaries, ADR-0024), with what React renders inside it.
+ */
+export type Renderer = (request: Request, parts?: Parts) => Promise<Fragment[]>;
+
+/** Resolvers for what React renders inside a page: islands (ADR-0020), boundaries (ADR-0024). */
+export interface Parts {
+  islands: Islands;
+  boundaries: Boundaries;
+}
 
 /**
  * The renderer of a compiled route of the app in `dir`: the page's data function (from the
@@ -434,19 +447,22 @@ export function renderer(route: CompiledRoute, dir: string, manifestDir: string)
     })();
     return loaded;
   };
-  return async (request, islands) => {
+  return async (request, parts) => {
     const { program, encode, entry, callees } = await load();
     const props = {
       params: Promise.resolve(request.params),
       searchParams: Promise.resolve(request.query),
     };
     const record = await entry(props);
-    const input = encode(record, callees, islands);
+    const input = encode(record, callees, parts?.islands, parts?.boundaries);
     const out = program.render(Buffer.from(input.buffer, input.byteOffset, input.byteLength));
     if (out.head !== "" || out.hints !== "") {
       throw new Error("the page hoists into <head> (not yet served by tsx2rs)");
     }
-    return [{ name: "page", html: out.html, flight: out.flight }];
+    return [
+      { name: "page", html: out.html, flight: out.flight },
+      ...(out.segments === "" ? [] : [{ name: "segments", html: out.segments, flight: "" }]),
+    ];
   };
 }
 

@@ -17,7 +17,7 @@ step "TypeScript: types";   pnpm typecheck
 step "TypeScript: root";    pnpm exec tsc -p tsconfig.json
 step "TypeScript: lint";    pnpm lint
 step "Format";              pnpm format:check
-step "TypeScript: tests";   pnpm test
+step "TypeScript: tests";   pnpm test:coverage  # with the coverage floors CI enforces
 step "Identity: Next.js fixtures"; pnpm test:identity
 step "Adapter: next build";   pnpm test:adapter
 step "Runtime: vs next start"; pnpm test:runtime

@@ -184,6 +184,16 @@ describe("the tsx2rs server, for a compiled route", () => {
     expect(ours.body).toContain("<title>Item 9</title>");
   });
 
+  it("learns each Suspense boundary's form from Next.js, then serves the page itself", async () => {
+    for (const path of ["/s/1", "/s/2", "/s/1", "/s/2"]) {
+      const [n, ours] = [await headers(nextUrl, path), await headers(oursUrl, path)];
+      expect(ours.body).toBe(n.body);
+      expect(ours.headers).toEqual(n.headers);
+    }
+    expect((await state())["/s/[n]"]).toMatchObject({ state: "served" });
+    expect((await headers(oursUrl, "/s/1")).compiled).toBe("compiled");
+  });
+
   it("learns metadata the params don't explain per request", async () => {
     await both("/m/1");
     await both("/m/2");
