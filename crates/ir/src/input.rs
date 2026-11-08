@@ -58,6 +58,10 @@ pub mod tag {
     /// then lowercase hex digits (`$L15`, `$3`, `$@a`). Written as it is, without React's `$`
     /// escape: a client component's type is one (ADR-0020). Only `Op::Value` reads it.
     pub const REFERENCE: u8 = 11;
+    /// An object or array the encoder may write more than once (a `u32` identity, then the
+    /// value): React writes a later occurrence of the same object as a reference to the first
+    /// (ADR-0026). Only `Op::Value` reads it.
+    pub const IDENTITY: u8 = 12;
 }
 
 /// Where [`Op::HtmlOutput`](crate::Op::HtmlOutput) sends HTML (one byte).

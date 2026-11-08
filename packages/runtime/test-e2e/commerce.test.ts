@@ -131,12 +131,23 @@ describe("Commerce", () => {
       expect(o.compiled).toBe("compiled");
       expect(o.body).toBe(n.body);
     }
-    // Client components are islands, learned from Next.js's responses next (ADR-0020).
-    for (const route of ["/", "/product/[handle]", "/product-streaming/[handle]"]) {
-      expect(states[route]).toMatchObject({
-        state: "refused",
-        reason: expect.stringMatching(/^tsx2rs can't render it: /) as string,
-      });
+    // The product pages: served once each URL has been learned (ADR-0020, -0024, -0025, -0026).
+    expect(states["/product/[handle]"]).toMatchObject({ state: "served" });
+    // The home page isn't served yet; it says why.
+    expect(states["/"]).toMatchObject({ state: "refused", reason: expect.any(String) as string });
+  });
+
+  it("serves milestone 1's reference pages itself, byte for byte", async () => {
+    // The product route switched to per-URL wrappers (ADR-0023) partway through the requests
+    // above, so a URL learned before the switch needs Next.js's answer once more.
+    for (const path of REFERENCE) {
+      const [n, o] = [await page(nextUrl, path), await page(oursUrl, path)];
+      expect(o.body).toBe(n.body);
+    }
+    for (const path of REFERENCE) {
+      const [n, o] = [await page(nextUrl, path), await page(oursUrl, path)];
+      expect(o.body).toBe(n.body);
+      expect(o.compiled, path).toBe("compiled");
     }
   });
 });

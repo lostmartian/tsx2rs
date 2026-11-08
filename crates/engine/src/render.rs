@@ -25,9 +25,9 @@ pub struct Output {
     /// The Flight (RSC) payload text for the rendered template, not yet split into rows or
     /// escaped for a `<script>` (see [`crate::script_string`]).
     pub flight: Vec<u8>,
-    /// Where server components' outputs start in [`Output::flight`] (`Op::Mark`), for
+    /// Where server components' outputs and identified objects start in [`Output::flight`], for
     /// [`crate::outline`].
-    pub marks: Vec<(usize, MarkKind)>,
+    pub marks: Vec<(usize, Mark)>,
     /// What React DOM hoists into the document's `<head>` (ADR-0010). It accumulates across
     /// renders for one request, with React's deduplication.
     pub head: Head,
@@ -53,6 +53,19 @@ impl Output {
         self.head.clear();
         self.hints.clear();
     }
+}
+
+/// What starts at a position in the Flight output ([`Output::marks`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mark {
+    /// A server component's output (`Op::Mark`, or a template node): React checks here whether to
+    /// defer it to a row of its own.
+    Component,
+    /// An async server component's output: always a row of its own.
+    Async,
+    /// An object or array with this identity (`tag::IDENTITY`): React writes it once, and later
+    /// occurrences as a reference to it.
+    Identity(u32),
 }
 
 /// Values, elements and template calls nest at most this deep together (deeper input is rejected,
@@ -189,7 +202,13 @@ impl<'p> Renderer<'p, '_> {
                 Op::Child => self.child(input, depth, context)?,
                 Op::Island => self.island(input)?,
                 Op::HtmlOutput => self.open_output(input)?,
-                Op::Mark { kind } => self.out.marks.push((self.out.flight.len(), kind)),
+                Op::Mark { kind } => self.out.marks.push((
+                    self.out.flight.len(),
+                    match kind {
+                        MarkKind::Component => Mark::Component,
+                        MarkKind::Async => Mark::Async,
+                    },
+                )),
                 Op::EndHtmlOutput => self.close_output(input)?,
                 Op::Loop { end, separator } => {
                     let count = input.u32()?;
@@ -500,7 +519,7 @@ impl<'p> Renderer<'p, '_> {
                 // A compiled component's output: React checks here whether to defer it.
                 self.out
                     .marks
-                    .push((self.out.flight.len(), MarkKind::Component));
+                    .push((self.out.flight.len(), Mark::Component));
                 self.call(TemplateId(id), input, depth, offset, context)?;
             }
             // React rejects any other object as a node, so the encoder never writes one.
@@ -528,6 +547,20 @@ impl<'p> Renderer<'p, '_> {
                 if !flight::reference(out, input.string()?) {
                     return Err(RenderError::InvalidValue { offset });
                 }
+            }
+            tag::IDENTITY => {
+                let identity = input.u32()?;
+                let at = input.offset();
+                if !matches!(input.peek(), Some(tag::ARRAY | tag::OBJECT)) {
+                    return Err(RenderError::BadTag {
+                        offset: at,
+                        tag: input.peek().unwrap_or(0),
+                    });
+                }
+                self.out
+                    .marks
+                    .push((self.out.flight.len(), Mark::Identity(identity)));
+                self.value(input, depth)?;
             }
             tag::ARRAY => {
                 let count = input.u32()?;

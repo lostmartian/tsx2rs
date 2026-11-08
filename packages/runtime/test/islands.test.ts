@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Route, type CompiledRoute, type Renderer } from "../src/compiled.js";
 import type { Islands } from "../src/encode.js";
-import { IslandCache, Miss, learnPage, placeholders } from "../src/islands.js";
+import { IslandCache, Miss, learnPage, placeholders, withIds } from "../src/islands.js";
 
 /**
  * Real Next.js 16.4.5 documents for `app/p/[n]/page.tsx`, whose `<Counter />` is a client
@@ -69,7 +69,15 @@ describe("learnPage", () => {
     const learned = learnPage(doc("5"), { ...page("5", islands), segments: "" }, calls);
     // The page as Next.js wrote it: what the wrapper is then captured around.
     const { html, flight } = page("5", () => COUNTER);
-    expect(learned).toEqual({ ok: true, parts: [COUNTER], html, segments: "", flight });
+    expect(learned).toEqual({
+      ok: true,
+      parts: [COUNTER],
+      html,
+      segments: "",
+      flight,
+      rows: [],
+      ids: ["9"],
+    });
     expect(doc("5")).toContain(learned.ok ? learned.html : "");
   });
 
@@ -122,6 +130,8 @@ describe("learnPage", () => {
       html: '<main><!--$--><a href="/">x</a><!--/$-->!</main>',
       segments: "",
       flight: flight("$b", "$L7"),
+      rows: [],
+      ids: ["2"],
     });
   });
 
@@ -148,6 +158,8 @@ describe("learnPage", () => {
       html: '<main><!--$?--><template id="B:2"></template><i>wait</i><!--/$-->!</main>',
       segments: segment,
       flight: flight("$b", "$L7"),
+      rows: [],
+      ids: ["2"],
     });
   });
 
@@ -182,6 +194,89 @@ describe("learnPage", () => {
       flight("$b", "$L7"),
     );
     expect(learnPage(odd, { ...bp, flight: flight(...refs) }, bc)).toMatchObject({ ok: false });
+  });
+});
+
+describe("learnPage, with rows", () => {
+  it("learns the ids Next.js gave the rows a page defers to, and the islands in them", () => {
+    const { islands, calls } = placeholders();
+    const link = islands(0, { href: "/" });
+    // The page defers its list (row 1), which defers its last item (row 2), with a link in it.
+    const ours = {
+      html: `<main><ul><li>a</li><li>${link.before}</li></ul></main>`,
+      segments: "",
+      flight: '["$","main",null,{"children":"$L!1"}]',
+      rows: [
+        '["$","ul",null,{"children":[["$","li","a",{"children":"a"}],"$L!2"]}]',
+        `["$","li","b",{"children":["$","${link.ref}",null,{"href":"/"}]}]`,
+      ],
+    };
+    const rows =
+      '9:["$","main",null,{"children":"$L1c"}]\n' +
+      '1c:["$","ul",null,{"children":[["$","li","a",{"children":"a"}],"$L2a"]}]\n' +
+      '2a:["$","li","b",{"children":["$","$L1d",null,{"href":"/"}]}]\n';
+    const document =
+      '<body><main><ul><li>a</li><li><a href="/">x</a></li></ul></main></body>' +
+      `<script>self.__next_f.push(${JSON.stringify([1, rows])})</script>`;
+    expect(learnPage(document, ours, calls)).toMatchObject({
+      ok: true,
+      parts: [{ ref: "$L1d", before: '<a href="/">x</a>', after: "" }],
+      flight: '["$","main",null,{"children":"$L1c"}]',
+      rows: [
+        '["$","ul",null,{"children":[["$","li","a",{"children":"a"}],"$L2a"]}]',
+        '["$","li","b",{"children":["$","$L1d",null,{"href":"/"}]}]',
+      ],
+      ids: ["9", "1c", "2a"],
+    });
+    expect(withIds(ours.rows[0] ?? "", ["9", "1c", "2a"])).toBe(
+      '["$","ul",null,{"children":[["$","li","a",{"children":"a"}],"$L2a"]}]',
+    );
+    // A row Next.js didn't write as the page renders it.
+    const changed = rows.replace('{"children":"a"}', '{"children":"b"}');
+    const other = document.replace(JSON.stringify([1, rows]), JSON.stringify([1, changed]));
+    expect(other).not.toBe(document);
+    expect(learnPage(other, ours, calls)).toMatchObject({
+      ok: false,
+      reason: "row 1c isn't in Next.js's response once as the page renders it",
+    });
+  });
+
+  it("learns a row's id from a reference to an object written in it, and checks it agrees", () => {
+    const { calls } = placeholders();
+    // Row 1 refers to an object in the page's row, by path; the page refers to row 1.
+    const ours = {
+      html: "<main>x</main>",
+      segments: "",
+      flight: '["$","main",null,{"o":{"a":1},"children":"$L!1"}]',
+      rows: ['["$","b",null,{"o":"$!0:props:o"}]'],
+    };
+    const rows = (page: string, ref: string) =>
+      `${page}:["$","main",null,{"o":{"a":1},"children":"$L7"}]\n` +
+      `7:["$","b",null,{"o":"${ref}:props:o"}]\n`;
+    const document = (page: string, ref: string) =>
+      `<body><main>x</main></body><script>self.__next_f.push(${JSON.stringify([1, rows(page, ref)])})</script>`;
+    expect(learnPage(document("a", "$a"), ours, calls)).toMatchObject({
+      ok: true,
+      ids: ["a", "7"],
+      rows: ['["$","b",null,{"o":"$a:props:o"}]'],
+    });
+    expect(withIds(ours.rows[0] ?? "", ["a", "7"])).toBe('["$","b",null,{"o":"$a:props:o"}]');
+    // The reference names another row than the page's: not explained.
+    expect(learnPage(document("a", "$c"), ours, calls)).toMatchObject({ ok: false });
+    // A reference that isn't one where the page has a row placeholder.
+    const odd = document("a", "$a").replace(
+      JSON.stringify([1, rows("a", "$a")]),
+      JSON.stringify([1, rows("a", "$a").replace('"$L7"', '"x"')]),
+    );
+    expect(learnPage(odd, ours, calls)).toMatchObject({ ok: false });
+  });
+
+  it("answers a request's row ids from the cache, and misses another number of rows", () => {
+    const cache = new IslandCache();
+    cache.set("/x", [], [], ["9", "1c", "2a"]);
+    expect(cache.resolver("/x").rows(2)).toEqual(["9", "1c", "2a"]);
+    expect(() => cache.resolver("/x").rows(3)).toThrow(Miss);
+    expect(placeholders().rows(2)).toBeUndefined();
   });
 });
 

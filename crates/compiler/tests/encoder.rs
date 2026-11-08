@@ -31,7 +31,7 @@ export default function Page({ a, xs, rest, s }) {
       <Tree n={2} />
       <Link href={a} prefetch={false}>{a}<i>x</i></Link>
       <Link href="/" key={a} />
-      <Link {...rest} />
+      <Link className={a} {...rest} />
       <Suspense fallback={<hr />}><b>{a}</b></Suspense>
     </main>
   );

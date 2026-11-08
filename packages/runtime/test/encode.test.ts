@@ -49,6 +49,7 @@ const T = {
   bigint: 8,
   element: 9,
   reference: 11,
+  identity: 12,
 };
 
 describe("primitive", () => {
@@ -149,17 +150,48 @@ describe("style and value", () => {
     ).toThrow(NotNative);
   });
 
-  it("writes arrays and plain objects, and refuses other objects", () => {
+  it("writes arrays and plain objects with their identities, and refuses other objects", () => {
     expect(
       bytes((w) => {
         value(w, [1, { a: null }]);
       }),
-    ).toEqual([T.array, ...u32(2), T.number, ...f64(1), T.object, ...u32(1), ...str("a"), T.null]);
+    ).toEqual([
+      T.identity,
+      ...u32(0),
+      T.array,
+      ...u32(2),
+      T.number,
+      ...f64(1),
+      T.identity,
+      ...u32(1),
+      T.object,
+      ...u32(1),
+      ...str("a"),
+      T.null,
+    ]);
     expect(
       bytes((w) => {
         value(w, Object.create(null) as object);
       }),
-    ).toEqual([T.object, ...u32(0)]);
+    ).toEqual([T.identity, ...u32(0), T.object, ...u32(0)]);
+    // The same object twice: the same identity, for the engine to write it once (ADR-0026).
+    const shared = { x: 1 };
+    const twice = bytes((w) => {
+      value(w, [shared, shared]);
+    });
+    const object = [T.object, ...u32(1), ...str("x"), T.number, ...f64(1)];
+    expect(twice).toEqual([
+      T.identity,
+      ...u32(0),
+      T.array,
+      ...u32(2),
+      T.identity,
+      ...u32(1),
+      ...object,
+      T.identity,
+      ...u32(1),
+      ...object,
+    ]);
     expect(() =>
       bytes((w) => {
         value(w, new Date(0));

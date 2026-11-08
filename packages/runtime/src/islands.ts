@@ -23,6 +23,17 @@
 import type { Boundaries, Boundary, Island, Islands } from "./encode.ts";
 import { decode } from "./capture.ts";
 
+/**
+ * What a page needs from what was learned: its islands and boundaries, and the ids of its row and
+ * the `count` rows it defers to (row `n`'s at `n`, the page's at 0), or `undefined` to keep the
+ * placeholders (`"$L!<n>"`, `"$!<n>:`).
+ */
+export interface Resolvers {
+  islands: Islands;
+  boundaries: Boundaries;
+  rows: (count: number) => string[] | undefined;
+}
+
 /** What the page asked for while rendering, in render order. */
 export type Call = { kind: "island"; index: number; props: string } | { kind: "boundary" };
 
@@ -30,7 +41,7 @@ export type Call = { kind: "island"; index: number; props: string } | { kind: "b
 type Part = Island | Boundary;
 
 /** Resolvers that answer with placeholders, and the calls they were asked for. */
-export function placeholders(): { islands: Islands; boundaries: Boundaries; calls: Call[] } {
+export function placeholders(): Resolvers & { calls: Call[] } {
   const calls: Call[] = [];
   const marker = (n: number, side: string) => `<!--tsx2rs:${String(n)}:${side}-->`;
   const islands: Islands = (index, props) => {
@@ -50,7 +61,7 @@ export function placeholders(): { islands: Islands; boundaries: Boundaries; call
       end: marker(n, "e"),
     };
   };
-  return { islands, boundaries, calls };
+  return { islands, boundaries, rows: () => undefined, calls };
 }
 
 /** Props as a cache key: their JSON (what Flight writes of them). */
@@ -63,7 +74,6 @@ function key(props: Record<string, unknown>): string {
 }
 
 const MARKER = /<!--tsx2rs:([0-9]+):([abocse])-->/g;
-const PLACEHOLDER = /"\$L([0-9a-f]+)"/g;
 const REFERENCE = /^\$[A-Za-z@]?[0-9a-f]+$/;
 const PENDING = /^<!--\$\?--><template id="B:([0-9a-z]+)"><\/template>/;
 const RESOLVED = "<!--$-->";
@@ -88,10 +98,13 @@ export type LearnedPage =
   | {
       ok: true;
       parts: Part[];
-      /** The page as Next.js wrote it: its HTML in the shell, its segments, its Flight row. */
+      /** The page as Next.js wrote it: its HTML in the shell, its segments, its Flight row, and
+       * the rows it defers to (ADR-0025) with the ids Next.js gave them. */
       html: string;
       segments: string;
       flight: string;
+      rows: string[];
+      ids: string[];
     }
   | { ok: false; reason: string };
 
@@ -103,7 +116,7 @@ class Unexplained extends Error {}
  */
 export function learnPage(
   document: string,
-  page: { html: string; segments: string; flight: string },
+  page: { html: string; segments: string; flight: string; rows?: string[] },
   calls: Call[],
 ): LearnedPage {
   try {
@@ -146,7 +159,7 @@ export function learnPage(
     }
     const learned = found[0];
     if (learned === undefined) throw new Unexplained("no page");
-    const flight = refsInFlight(document, page.flight, calls.length);
+    const flight = matchFlight(document, [page.flight, ...(page.rows ?? [])], calls.length);
     const parts: Part[] = [];
     for (const [n, call] of calls.entries()) {
       const ref = flight.refs[n] ?? "";
@@ -156,7 +169,15 @@ export function learnPage(
       else if (call.kind === "island") parts.push({ ref, before: "", after: "" });
       else throw new Unexplained("a boundary inside a fallback React didn't render");
     }
-    return { ok: true, parts, html: learned.html, segments: learned.segments, flight: flight.row };
+    return {
+      ok: true,
+      parts,
+      html: learned.html,
+      segments: learned.segments,
+      flight: flight.values[0] ?? "",
+      rows: flight.values.slice(1),
+      ids: flight.ids,
+    };
   } catch (error) {
     if (error instanceof Unexplained) return { ok: false, reason: error.message };
     throw error;
@@ -304,57 +325,141 @@ class Walk {
   }
 }
 
-/** Each placeholder's reference, and the page's Flight row as Next.js wrote it. */
-function refsInFlight(
-  document: string,
-  flight: string,
-  count: number,
-): { refs: string[]; row: string } {
+/**
+ * A placeholder in one of our rows: an island's or boundary's reference (`"$L<n>"`), a row's
+ * (`"$L!<n>"`, ADR-0025), or the start of a reference to an object written before (`"$!<n>:`, its
+ * row, then its path, ADR-0026).
+ */
+const REF = /"\$L!([0-9]+)"|"\$L([0-9a-f]+)"|"\$!([0-9]+):/g;
+
+interface Hole {
+  kind: "call" | "row" | "path";
+  n: number;
+}
+
+/** One of our rows as text, and the placeholders between. */
+function split(row: string): { pieces: string[]; holes: Hole[] } {
   const pieces: string[] = [];
-  const order: number[] = [];
+  const holes: Hole[] = [];
   let at = 0;
-  for (const m of flight.matchAll(PLACEHOLDER)) {
-    pieces.push(flight.slice(at, m.index));
-    order.push(parseInt(m[1] ?? "", 16));
+  for (const m of row.matchAll(REF)) {
+    pieces.push(row.slice(at, m.index));
+    holes.push(
+      m[1] !== undefined
+        ? { kind: "row", n: Number(m[1]) }
+        : m[2] !== undefined
+          ? { kind: "call", n: parseInt(m[2], 16) }
+          : { kind: "path", n: Number(m[3]) },
+    );
     at = m.index + m[0].length;
   }
-  pieces.push(flight.slice(at));
-  if (order.length !== count || order.some((n, i) => n !== i)) {
+  pieces.push(row.slice(at));
+  return { pieces, holes };
+}
+
+/** What a row's placeholders are in Next.js's text from `at`: where it ends, or `undefined`. */
+function matchRow(
+  text: string,
+  at: number,
+  row: { pieces: string[]; holes: Hole[] },
+  found: { refs: string[]; ids: string[] },
+): number | undefined {
+  if (!text.startsWith(row.pieces[0] ?? "", at)) return undefined;
+  let pos = at + (row.pieces[0] ?? "").length;
+  // A row's id: the same wherever it's referred to.
+  const id = (n: number, value: string) => {
+    if (found.ids[n] !== undefined && found.ids[n] !== value) return false;
+    found.ids[n] = value;
+    return true;
+  };
+  for (const [i, hole] of row.holes.entries()) {
+    if (text[pos] !== '"') return undefined;
+    let end: number;
+    if (hole.kind === "path") {
+      // `"$<id>:`, then the path, which is the next piece.
+      const m = /^"\$([0-9a-f]+):/.exec(text.slice(pos, pos + 16));
+      if (!m || !id(hole.n, m[1] ?? "")) return undefined;
+      end = pos + m[0].length;
+    } else {
+      // A reference is a JSON string: up to its closing quote.
+      const close = text.indexOf('"', pos + 1);
+      const ref = close === -1 ? "" : text.slice(pos + 1, close);
+      if (!REFERENCE.test(ref)) return undefined;
+      if (hole.kind === "row") {
+        if (!ref.startsWith("$L") || !id(hole.n, ref.slice(2))) return undefined;
+      } else found.refs[hole.n] = ref;
+      end = close + 1;
+    }
+    const piece = row.pieces[i + 1] ?? "";
+    if (!text.startsWith(piece, end)) return undefined;
+    pos = end + piece.length;
+  }
+  return pos;
+}
+
+/**
+ * Each placeholder's reference, each row's id, and the rows as Next.js wrote them: the page's row
+ * (found once among Next.js's rows), then each row the page defers to (ADR-0025), found by the id
+ * Next.js gave it.
+ */
+function matchFlight(
+  document: string,
+  rows: string[],
+  count: number,
+): { refs: string[]; ids: string[]; values: string[] } {
+  const ours = rows.map(split);
+  const calls = ours.flatMap((r) => r.holes.filter((h) => h.kind === "call").map((h) => h.n));
+  if (calls.length !== count || [...calls].sort((a, b) => a - b).some((n, i) => n !== i)) {
     throw new Unexplained(
       "the page's Flight references aren't the islands and boundaries it rendered",
     );
   }
-  const found: { refs: string[]; row: string }[] = [];
-  for (const unit of decode(document)) {
-    if (unit.kind !== "flight") continue;
-    const text = unit.text;
-    const first = `:${pieces[0] ?? ""}`;
-    for (let start = text.indexOf(first); start !== -1; start = text.indexOf(first, start + 1)) {
-      let pos = start + first.length;
-      const refs: string[] = [];
-      let complete = true;
-      for (let i = 1; i < pieces.length && complete; i++) {
-        // A reference is a JSON string: up to its closing quote.
-        if (text[pos] !== '"') {
-          complete = false;
-          break;
-        }
-        const close = text.indexOf('"', pos + 1);
-        const ref = close === -1 ? "" : text.slice(pos + 1, close);
-        const piece = pieces[i] ?? "";
-        if (!REFERENCE.test(ref) || !text.startsWith(piece, close + 1)) complete = false;
-        refs.push(ref);
-        pos = close + 1 + piece.length;
+  const units = decode(document).flatMap((u) => (u.kind === "flight" ? [u.text] : []));
+  const page = ours[0] ?? { pieces: [""], holes: [] };
+  const candidates: { refs: string[]; ids: string[]; value: string }[] = [];
+  const first = `:${page.pieces[0] ?? ""}`;
+  for (const text of units) {
+    for (let at = text.indexOf(first); at !== -1; at = text.indexOf(first, at + 1)) {
+      // The page's row: at the start of a line, its id before the `:`.
+      const line = text.lastIndexOf("\n", at) + 1;
+      const own = text.slice(line, at);
+      if (!/^[0-9a-f]+$/.test(own)) continue;
+      const found = { refs: [] as string[], ids: [own] };
+      const end = matchRow(text, at + 1, page, found);
+      if (end !== undefined && text[end] === "\n") {
+        candidates.push({ ...found, value: text.slice(at + 1, end) });
       }
-      if (complete && text[pos] === "\n") found.push({ refs, row: text.slice(start + 1, pos) });
     }
   }
-  if (found.length !== 1) {
+  if (candidates.length !== 1 || !candidates[0]) {
     throw new Unexplained(
-      `the page's Flight row with its islands found ${String(found.length)} times in Next.js's response, not once`,
+      `the page's Flight row with its islands found ${String(candidates.length)} times in Next.js's response, not once`,
     );
   }
-  return found[0] ?? { refs: [], row: "" };
+  const { refs, ids, value } = candidates[0];
+  const values = [value];
+  for (let n = 1; n < ours.length; n++) {
+    const id = ids[n];
+    const row = ours[n];
+    if (id === undefined || !row) throw new Unexplained(`row ${String(n)} isn't referred to`);
+    // The row Next.js wrote with that id: at the start of a line.
+    const starts = units.flatMap((text) => {
+      const out: { text: string; at: number }[] = [];
+      for (let at = text.indexOf(`${id}:`); at !== -1; at = text.indexOf(`${id}:`, at + 1)) {
+        if (at === 0 || text[at - 1] === "\n") out.push({ text, at: at + id.length + 1 });
+      }
+      return out;
+    });
+    const matches = starts.flatMap(({ text, at }) => {
+      const end = matchRow(text, at, row, { refs, ids });
+      return end !== undefined && text[end] === "\n" ? [text.slice(at, end)] : [];
+    });
+    if (matches.length !== 1 || matches[0] === undefined) {
+      throw new Unexplained(`row ${id} isn't in Next.js's response once as the page renders it`);
+    }
+    values.push(matches[0]);
+  }
+  return { refs, ids, values };
 }
 
 /** How many requests' learned parts a route keeps (the oldest learned go first). */
@@ -362,10 +467,10 @@ const PAGES = 10_000;
 
 /** What was learned for each request: by variant and URL, then by order in the page. */
 export class IslandCache {
-  private readonly pages = new Map<string, { calls: Call[]; parts: Part[] }>();
+  private readonly pages = new Map<string, { calls: Call[]; parts: Part[]; ids: string[] }>();
 
   /** The resolvers for a request: they throw {@link Miss} for anything not learned for it. */
-  resolver(request: string): { islands: Islands; boundaries: Boundaries } {
+  resolver(request: string): Resolvers {
     const page = this.pages.get(request);
     let n = 0;
     const next = () => {
@@ -385,17 +490,30 @@ export class IslandCache {
         if (call?.kind !== "boundary" || !part) throw new Miss();
         return part as Boundary;
       },
+      rows: (count) => {
+        if (page?.ids.length !== count + 1) throw new Miss();
+        return page.ids;
+      },
     };
   }
 
-  set(request: string, calls: Call[], parts: Part[]): void {
+  set(request: string, calls: Call[], parts: Part[], ids: string[] = []): void {
     this.pages.delete(request);
-    this.pages.set(request, { calls, parts });
+    this.pages.set(request, { calls, parts, ids });
     if (this.pages.size > PAGES) {
       const oldest = this.pages.keys().next();
       if (oldest.done !== true) this.pages.delete(oldest.value);
     }
   }
+}
+
+/** `row` with each row placeholder (`"$L!<n>"`, `"$!<n>:`) given the id Next.js gave row `n`. */
+export function withIds(row: string, ids: string[]): string {
+  return row.replace(
+    /"\$L!([0-9]+)"|"\$!([0-9]+):/g,
+    (_, r: string | undefined, p: string | undefined) =>
+      r === undefined ? `"$${ids[Number(p)] ?? ""}:` : `"$L${ids[Number(r)] ?? ""}"`,
+  );
 }
 
 /** Something the cache hasn't learned for this request. */

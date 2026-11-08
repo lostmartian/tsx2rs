@@ -45,6 +45,11 @@ impl<'a> Input<'a> {
         Ok(slice)
     }
 
+    /// The next byte, without reading it.
+    pub(crate) fn peek(&self) -> Option<u8> {
+        self.bytes.get(self.at).copied()
+    }
+
     pub(crate) fn u8(&mut self) -> Result<u8, RenderError> {
         Ok(self.take(1)?[0])
     }
@@ -122,6 +127,10 @@ impl<'a> Input<'a> {
             }
             tag::STRING | tag::REFERENCE => {
                 self.string()?;
+            }
+            tag::IDENTITY => {
+                self.u32()?;
+                self.skip(depth)?;
             }
             tag::BIGINT => {
                 self.bigint()?;

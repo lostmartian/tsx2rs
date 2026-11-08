@@ -21,6 +21,7 @@ const TAG = {
   bigint: 8,
   element: 9,
   reference: 11,
+  identity: 12,
 } as const;
 
 /** A value the engine can't take natively, and why. */
@@ -55,6 +56,20 @@ export class Input {
   u8(n: number): void {
     this.reserve(1);
     this.buffer[this.length++] = n;
+  }
+
+  /** The objects written with an identity, and theirs. */
+  private readonly identities = new Map<object, number>();
+
+  /** An object's identity (`tag::IDENTITY`): the same for the same object in one input. */
+  identity(object: object): void {
+    let id = this.identities.get(object);
+    if (id === undefined) {
+      id = this.identities.size;
+      this.identities.set(object, id);
+    }
+    this.u8(TAG.identity);
+    this.u32(id);
   }
 
   /** A condition (`Op::If`). */
@@ -144,17 +159,27 @@ export function style(w: Input, v: unknown): void {
 
 /** `Op::Value`: a value React's Flight server writes natively. */
 export function value(w: Input, v: unknown): void {
+  write(w, v, true);
+}
+
+/**
+ * A value: with `identify`, each array and plain object with its identity first, as React writes
+ * an object it has written before as a reference to it (ADR-0026).
+ */
+function write(w: Input, v: unknown, identify: boolean): void {
   if (Array.isArray(v)) {
+    if (identify) w.identity(v);
     w.u8(TAG.array);
     w.u32(v.length);
-    for (const item of v) value(w, item);
+    for (const item of v) write(w, item, identify);
   } else if (isPlainObject(v)) {
+    if (identify) w.identity(v);
     const entries = Object.entries(v);
     w.u8(TAG.object);
     w.u32(entries.length);
     for (const [key, item] of entries) {
       w.string(key);
-      value(w, item);
+      write(w, item, identify);
     }
   } else if (v !== null && typeof v === "object") {
     throw new NotNative("an object that isn't plain or an array", v);
@@ -309,7 +334,8 @@ export function node(w: Input, v: unknown): void {
     w.u32(entries.length);
     for (const [name, item] of entries) {
       w.string(name);
-      if (name !== "children") value(w, item);
+      // An element's props are read by the engine's element writer, which takes no identities.
+      if (name !== "children") write(w, item, false);
     }
     if ("children" in v.props) node(w, v.props["children"]);
   } else if (v !== null && typeof v === "object") {

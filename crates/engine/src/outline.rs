@@ -12,10 +12,18 @@
 //! rows: the first is the page's, the others in React's task order. A row's id is its index here;
 //! references to it are written `"$L!<index>"`, for the runtime to replace with the id Next.js gave
 //! it (the ids interleave with other rows of Next.js's payload).
+//!
+//! React also writes an object it has written before (the same object, by identity) as a
+//! reference to where it first wrote it (ADR-0026): `"$<row>:<path>"`, the path from the row's
+//! value through each property, index, or an element's `type`, `key` or `props`. Each object is
+//! registered with its path as React's walk reaches it, if its parent was (a key with a `:` breaks
+//! the chain). The encoder tags the objects that may repeat with an identity
+//! (`tsx2rs_ir::input::tag::IDENTITY`); the first occurrence React's walk reaches is written, and
+//! later ones as `"$!<index>:<path>"`.
 
 use std::collections::{HashMap, VecDeque};
 
-use tsx2rs_ir::MarkKind;
+use crate::render::Mark;
 
 /// React's `serializedSize` limit: past it, an element is deferred to a row of its own.
 const MAX_ROW_SIZE: usize = 3200;
@@ -61,7 +69,7 @@ enum Kind {
 /// # Errors
 ///
 /// [`OutlineError`] if the value can't be split as React would.
-pub fn outline(flight: &[u8], marks: &[(usize, MarkKind)]) -> Result<Vec<Vec<u8>>, OutlineError> {
+pub fn outline(flight: &[u8], marks: &[(usize, Mark)]) -> Result<Vec<Vec<u8>>, OutlineError> {
     let mut parser = Parser {
         src: flight,
         at: 0,
@@ -78,28 +86,38 @@ pub fn outline(flight: &[u8], marks: &[(usize, MarkKind)]) -> Result<Vec<Vec<u8>
         .map(|(i, n)| (n.start, i))
         .collect();
     let mut marked = HashMap::new();
-    for &(at, kind) in marks {
-        // Nested components start where their caller's output does: the outermost mark wins
-        // (an async component's output is a row whatever is inside it).
+    let mut identities = HashMap::new();
+    for &(at, mark) in marks {
         let node = *starts.get(&at).ok_or(OutlineError::Mark(at))?;
-        let entry = marked.entry(node).or_insert(kind);
-        if kind == MarkKind::Async {
-            *entry = MarkKind::Async;
+        match mark {
+            Mark::Identity(identity) => {
+                identities.insert(node, identity);
+            }
+            // Nested components start where their caller's output does; an async component's
+            // output is a row whatever is inside it.
+            Mark::Async => {
+                marked.insert(node, Mark::Async);
+            }
+            Mark::Component => {
+                marked.entry(node).or_insert(Mark::Component);
+            }
         }
     }
     let mut outliner = Outliner {
         src: flight,
         nodes: &parser.nodes,
         marked,
+        identities,
+        written: HashMap::new(),
         rows: vec![Vec::new()],
         queue: VecDeque::new(),
     };
     let mut row = Vec::new();
-    outliner.task(root, &mut row)?;
+    outliner.task(root, 0, &mut row)?;
     outliner.rows[0] = row;
     while let Some((node, id)) = outliner.queue.pop_front() {
         let mut row = Vec::new();
-        outliner.task(node, &mut row)?;
+        outliner.task(node, id, &mut row)?;
         outliner.rows[id] = row;
     }
     Ok(outliner.rows)
@@ -108,35 +126,55 @@ pub fn outline(flight: &[u8], marks: &[(usize, MarkKind)]) -> Result<Vec<Vec<u8>
 struct Outliner<'a> {
     src: &'a [u8],
     nodes: &'a [Node],
-    marked: HashMap<usize, MarkKind>,
+    marked: HashMap<usize, Mark>,
+    /// Identified objects (node → identity).
+    identities: HashMap<usize, u32>,
+    /// Where each identity was first written: its reference.
+    written: HashMap<u32, String>,
     rows: Vec<Vec<u8>>,
     /// Deferred values and their row ids, in creation order.
     queue: VecDeque<(usize, usize)>,
 }
 
 impl Outliner<'_> {
-    /// A task: `node` as its model, counting from 0.
-    fn task(&mut self, node: usize, out: &mut Vec<u8>) -> Result<(), OutlineError> {
+    /// A task: `node` as its model, counting from 0, its path the row's (`$!<row>`).
+    fn task(&mut self, node: usize, row: usize, out: &mut Vec<u8>) -> Result<(), OutlineError> {
         let mut size = 0;
-        self.write(node, 0, &mut size, out, true)
+        let path = format!("$!{row}");
+        self.write(node, 0, &mut size, out, Some(&path), true)
     }
 
+    /// Writes `node`, reached by a key `key_length` long, at `path` (`None` once React stops
+    /// registering paths).
     fn write(
         &mut self,
         node: usize,
         key_length: usize,
         size: &mut usize,
         out: &mut Vec<u8>,
+        path: Option<&str>,
         root: bool,
     ) -> Result<(), OutlineError> {
         *size += key_length;
         let n = &self.nodes[node];
+        if let Some(&identity) = self.identities.get(&node) {
+            if let Some(reference) = self.written.get(&identity) {
+                // Written before: a reference to it (React doesn't count it).
+                out.push(b'"');
+                out.extend_from_slice(reference.as_bytes());
+                out.push(b'"');
+                return Ok(());
+            }
+            if let Some(path) = path {
+                self.written.insert(identity, path.to_owned());
+            }
+        }
         if !root {
             let element = self.is_element(node);
             let deferred = match self.marked.get(&node) {
-                Some(MarkKind::Async) => true,
-                Some(MarkKind::Component) => *size > MAX_ROW_SIZE,
-                None => element && *size > MAX_ROW_SIZE,
+                Some(Mark::Async) => true,
+                Some(Mark::Component) => *size > MAX_ROW_SIZE,
+                _ => element && *size > MAX_ROW_SIZE,
             };
             if deferred {
                 let id = self.rows.len();
@@ -159,12 +197,21 @@ impl Outliner<'_> {
             Kind::Literal => out.extend_from_slice(&self.src[n.start..n.end]),
             Kind::Array(items) => {
                 let items = items.clone();
+                let element = self.is_element(node);
                 out.push(b'[');
                 for (i, item) in items.into_iter().enumerate() {
                     if i > 0 {
                         out.push(b',');
                     }
-                    self.write(item, digits(i), size, out, false)?;
+                    // An element's type, key and props are reached by name.
+                    let segment = match (element, i) {
+                        (true, 1) => "type".to_owned(),
+                        (true, 2) => "key".to_owned(),
+                        (true, 3) => "props".to_owned(),
+                        _ => i.to_string(),
+                    };
+                    let child = self.child_path(path, item, &segment);
+                    self.write(item, digits(i), size, out, child.as_deref(), false)?;
                 }
                 out.push(b']');
             }
@@ -178,12 +225,23 @@ impl Outliner<'_> {
                     }
                     out.extend_from_slice(&self.src[key_start..key_end]);
                     out.push(b':');
-                    self.write(value, key_length, size, out, false)?;
+                    // The key as written (JSON-escaped), which is how it goes into a reference.
+                    let key = String::from_utf8_lossy(&self.src[key_start + 1..key_end - 1]);
+                    let child = self.child_path(path, value, &key);
+                    self.write(value, key_length, size, out, child.as_deref(), false)?;
                 }
                 out.push(b'}');
             }
         }
         Ok(())
+    }
+
+    /// The path React registers for `node` under its parent's `path` and `segment`: only objects
+    /// and arrays, only while every key on the way is free of `:`.
+    fn child_path(&self, path: Option<&str>, node: usize, segment: &str) -> Option<String> {
+        let path = path?;
+        let object = matches!(self.nodes[node].kind, Kind::Array(_) | Kind::Object(_));
+        (object && !segment.contains(':')).then(|| format!("{path}:{segment}"))
     }
 
     /// An element: `["$", type, key, props]`, as React writes one.
@@ -336,9 +394,9 @@ impl Parser<'_> {
 #[cfg(test)]
 mod tests {
     use super::{OutlineError, outline};
-    use tsx2rs_ir::MarkKind;
+    use crate::render::Mark;
 
-    fn rows(flight: &str, marks: &[(usize, MarkKind)]) -> Vec<String> {
+    fn rows(flight: &str, marks: &[(usize, Mark)]) -> Vec<String> {
         outline(flight.as_bytes(), marks)
             .unwrap()
             .into_iter()
@@ -357,7 +415,7 @@ mod tests {
         let flight = r#"["$","main",null,{"children":["$","p",null,{}]}]"#;
         let at = flight.find(r#"["$","p""#).unwrap();
         assert_eq!(
-            rows(flight, &[(at, MarkKind::Async), (at, MarkKind::Component)]),
+            rows(flight, &[(at, Mark::Async), (at, Mark::Component)]),
             [
                 r#"["$","main",null,{"children":"$L!1"}]"#,
                 r#"["$","p",null,{}]"#
@@ -378,6 +436,30 @@ mod tests {
     }
 
     #[test]
+    fn writes_an_object_written_before_as_a_reference_to_its_path() {
+        // The same object (identity 7) as `a` in an element's props, then again under `b`, then
+        // under a key with a `:`, where React stops registering paths.
+        let flight = r#"[["$","p",null,{"a":{"x":1}}],{"b":{"x":1},"c:d":{"y":[]}},{"y":[]}]"#;
+        let first = flight.find(r#"{"x":1}"#).unwrap();
+        let second = flight.rfind(r#"{"x":1}"#).unwrap();
+        let third = flight.find(r#"{"y":[]}"#).unwrap();
+        let fourth = flight.rfind(r#"{"y":[]}"#).unwrap();
+        let marks = [
+            (first, Mark::Identity(7)),
+            (second, Mark::Identity(7)),
+            (third, Mark::Identity(8)),
+            (fourth, Mark::Identity(8)),
+        ];
+        assert_eq!(
+            rows(flight, &marks),
+            [concat!(
+                r#"[["$","p",null,{"a":{"x":1}}],{"b":"$!0:0:props:a","c:d":{"y":[]}},"#,
+                r#"{"y":[]}]"#
+            )]
+        );
+    }
+
+    #[test]
     fn rejects_what_it_cant_split() {
         let long = "x".repeat(1024);
         assert_eq!(
@@ -387,7 +469,7 @@ mod tests {
         assert_eq!(outline(b"[1,", &[]), Err(OutlineError::Malformed(3)));
         assert_eq!(outline(b"[1] ", &[]), Err(OutlineError::Malformed(3)));
         assert_eq!(
-            outline(b"[1]", &[(2, MarkKind::Component)]),
+            outline(b"[1]", &[(2, Mark::Component)]),
             Err(OutlineError::Mark(2))
         );
         assert_eq!(outline(b"{\"a\" 1}", &[]), Err(OutlineError::Malformed(4)));
