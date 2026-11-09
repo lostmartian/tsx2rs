@@ -13,7 +13,7 @@ mod cases;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
-use tsx2rs_engine::{render, script_string};
+use tsx2rs_engine::{Output, outline, render, script_string};
 
 fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("render");
@@ -42,6 +42,17 @@ fn bench(c: &mut Criterion) {
             script_string(&mut out, black_box(&flight));
             black_box(&out);
         });
+    });
+    group.finish();
+
+    // Splitting the Commerce page's Flight into rows (ADR-0025, ADR-0030).
+    let case = cases::commerce_product();
+    let mut out = Output::new();
+    render(&case.program, &case.input, &mut out).unwrap();
+    let mut group = c.benchmark_group("outline");
+    group.throughput(Throughput::Bytes(out.flight.len() as u64));
+    group.bench_function("commerce_product", |b| {
+        b.iter(|| black_box(outline(black_box(&out.flight), black_box(&out.marks)).unwrap()));
     });
     group.finish();
 }
