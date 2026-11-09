@@ -68,10 +68,18 @@ export interface Options {
    * route compares its own document with Next.js's (ADR-0027). 0 turns re-checks off.
    */
   verifyEvery?: number;
+  /**
+   * And at most once every this many milliseconds per route (ADR-0032): a re-check costs a whole
+   * Next.js render, so a busy route isn't re-checked more than this. 0 turns the limit off.
+   */
+  verifyInterval?: number;
 }
 
 /** The default for {@link Options.verifyEvery}. */
 export const VERIFY_EVERY = 100;
+
+/** The default for {@link Options.verifyInterval}: one re-check a second per route at most. */
+export const VERIFY_INTERVAL = 1000;
 
 /** Whether tsx2rs serves a request (`route`: its page's pathname), or Next.js does, and why. */
 export type Decision =
@@ -116,6 +124,7 @@ export async function createHandler(options: Options): Promise<{
       renderer(r as CompiledRoute, dir, manifestDir),
       build.compress ? compression(dir) : undefined,
       options.verifyEvery ?? VERIFY_EVERY,
+      options.verifyInterval ?? VERIFY_INTERVAL,
     );
     for (const pathname of r.pathnames)
       if (!pathname.endsWith(".rsc")) compiled.set(pathname, route);

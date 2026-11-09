@@ -14,8 +14,9 @@
  * - a data function that throws (one that reads Next.js's request context, for now);
  * - a response that differs in ways the slots don't explain.
  *
- * Served routes are **re-checked** (ADR-0027): every `verifyEvery`th request a route would serve,
- * Next.js answers instead, and the route compares its own document with Next.js's. A difference
+ * Served routes are **re-checked** (ADR-0027, ADR-0032): once at least `verifyEvery` requests it
+ * would serve have passed and at least `verifyInterval` ms since its last re-check, Next.js answers
+ * instead, and the route compares its own document with Next.js's. A difference
  * means what it learned has gone stale (a product's title changed, a menu got another item): it
  * forgets what it learned for that request, or relearns its shared wrapper.
  *
@@ -298,17 +299,26 @@ export class Route {
   /** Next.js's `compression` middleware, as `next start` applies it (unless `compress: false`). */
   private readonly compress: Compress | undefined;
 
-  /** Every this many requests the route would serve, Next.js answers and the route compares. */
-  private readonly verifyEvery: number;
-  private served = 0;
+  /** When Next.js answers a request the route would serve, and the route compares. */
+  private readonly rechecks: Rechecks;
   /** Re-checks so far, and how many found a difference. */
   readonly checks = { compared: 0, differed: 0 };
 
-  constructor(route: CompiledRoute, render: Renderer, compress?: Compress, verifyEvery = 0) {
+  /**
+   * A route that re-checks after `verifyEvery` requests it would serve (0: never), at most once
+   * every `verifyInterval` ms.
+   */
+  constructor(
+    route: CompiledRoute,
+    render: Renderer,
+    compress?: Compress,
+    verifyEvery = 0,
+    verifyInterval = 0,
+  ) {
     this.route = route;
     this.render = render;
     this.compress = compress;
-    this.verifyEvery = verifyEvery;
+    this.rechecks = new Rechecks(verifyEvery, verifyInterval);
   }
 
   /** The state of the default variant (requests without cookies, not from a bot), or the
@@ -383,7 +393,7 @@ export class Route {
       (metadata || !fragmentNames(template).has("metadata"))
     ) {
       const body = fill(template, values);
-      if (this.verifyEvery > 0 && req.method !== "HEAD" && ++this.served % this.verifyEvery === 0) {
+      if (req.method !== "HEAD" && this.rechecks.due()) {
         // A re-check: Next.js answers, and what this route would have sent must be the same.
         await tee(req, res, next, (response) => {
           if (response.status !== variant.head?.status) return;
@@ -448,6 +458,37 @@ export class Route {
         url,
       );
     });
+  }
+}
+
+/**
+ * When a route re-checks (ADR-0027, ADR-0032): once at least `every` requests it would serve have
+ * passed since the last re-check, and at least `interval` ms. The count keeps re-checks to at most
+ * one request in `every`; the time keeps them to at most one a second (by default) however busy the
+ * route is, as each costs a whole Next.js render.
+ */
+export class Rechecks {
+  private readonly every: number;
+  private readonly interval: number;
+  private readonly now: () => number;
+  private since = 0;
+  private last = Number.NEGATIVE_INFINITY;
+
+  /** `every` 0 never re-checks. `now` is the clock, in ms. */
+  constructor(every: number, interval: number, now: () => number = () => performance.now()) {
+    this.every = every;
+    this.interval = interval;
+    this.now = now;
+  }
+
+  /** Whether the request the route is about to serve is re-checked instead. */
+  due(): boolean {
+    if (this.every <= 0 || ++this.since < this.every) return false;
+    const now = this.now();
+    if (now - this.last < this.interval) return false;
+    this.since = 0;
+    this.last = now;
+    return true;
   }
 }
 
