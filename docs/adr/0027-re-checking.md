@@ -1,6 +1,6 @@
 # ADR-0027: Served routes are re-checked against Next.js
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0032](0032-recheck-interval.md)
 - **Date:** 2026-11-08
 
 ## Context

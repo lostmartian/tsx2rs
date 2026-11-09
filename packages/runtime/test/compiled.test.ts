@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { createGzip, gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  Rechecks,
   Route,
   fragments,
   type CompiledRoute,
@@ -532,5 +533,55 @@ describe("a render's fragments (ADR-0031)", () => {
     expect(row?.name).toBe("row:1");
     expect(page?.flight).toContain('"$L!1"');
     expect(page?.bytes?.script.toString()).toContain(String.raw`\"$L!1\"`);
+  });
+});
+
+describe("re-check timing (ADR-0032)", () => {
+  /** Which of `n` requests are re-checks, the clock at `at(i)` ms for request `i`. */
+  function due(rechecks: (now: () => number) => Rechecks, n: number, at: (i: number) => number) {
+    let i = 0;
+    const r = rechecks(() => at(i));
+    const out: number[] = [];
+    for (; i < n; i++) if (r.due()) out.push(i);
+    return out;
+  }
+
+  it("re-checks one request in `every` while requests are slower than the interval", () => {
+    // 10 requests a second: every 4th is due, and 400 ms apart is past the 100 ms interval.
+    expect(
+      due(
+        (now) => new Rechecks(4, 100, now),
+        12,
+        (i) => i * 100,
+      ),
+    ).toEqual([3, 7, 11]);
+  });
+
+  it("re-checks at most once an interval however busy the route is", () => {
+    // 1,000 requests a second, every 4th would be due: one a second instead.
+    expect(
+      due(
+        (now) => new Rechecks(4, 1000, now),
+        3000,
+        (i) => i,
+      ),
+    ).toEqual([3, 1003, 2003]);
+  });
+
+  it("never re-checks with `every` 0, and only counts with interval 0", () => {
+    expect(
+      due(
+        (now) => new Rechecks(0, 0, now),
+        50,
+        () => 0,
+      ),
+    ).toEqual([]);
+    expect(
+      due(
+        (now) => new Rechecks(5, 0, now),
+        10,
+        () => 0,
+      ),
+    ).toEqual([4, 9]);
   });
 });

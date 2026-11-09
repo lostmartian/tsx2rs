@@ -32,10 +32,11 @@ Format: [MADR](https://adr.github.io/madr/)-style. Context → Decision → Cons
 | [0024](0024-suspense-boundaries.md) | Suspense boundaries are compiled, and their form is learned from Next.js | Accepted |
 | [0025](0025-flight-rows.md) | The engine splits Flight into rows as React does, and async components are compiled | Accepted |
 | [0026](0026-object-identity.md) | Objects React has written before are written as references | Accepted |
-| [0027](0027-re-checking.md) | Served routes are re-checked against Next.js | Accepted |
+| [0027](0027-re-checking.md) | Served routes are re-checked against Next.js | Superseded by [0032](0032-recheck-interval.md) |
 | [0028](0028-tsx2rs-start.md) | `tsx2rs start` runs the app, with a worker per core when asked | Accepted |
 | [0029](0029-memoized-formatters.md) | Data functions memoize `Intl` formatters | Accepted |
 | [0030](0030-streaming-outline.md) | Flight rows are split in one streaming pass | Accepted |
 | [0031](0031-byte-responses.md) | Compiled responses are assembled and written as bytes | Accepted |
+| [0032](0032-recheck-interval.md) | Re-checks are limited in time as well as by count | Accepted |
 
 Background research (benchmarks, spikes, the full decision history before this repository existed) lives in the separate `tsx2rs-lab` repository.

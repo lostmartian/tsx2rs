@@ -4,6 +4,7 @@
  * does, with its compiled routes served by tsx2rs and everything else by Next.js's own handler.
  *
  *     tsx2rs start [dir] [--port 3000] [--host 0.0.0.0] [--workers 1|auto] [--verify-every 100]
+ *                  [--verify-interval 1000]
  *
  * With several workers, each is a whole server sharing the port (`node:cluster`), learning and
  * serving on its own; one that dies is replaced.
@@ -14,7 +15,7 @@ import { availableParallelism } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { VERIFY_EVERY, start } from "./server.ts";
+import { VERIFY_EVERY, VERIFY_INTERVAL, start } from "./server.ts";
 
 /** What `tsx2rs start` was asked for. */
 export interface StartOptions {
@@ -23,9 +24,10 @@ export interface StartOptions {
   host: string;
   workers: number;
   verifyEvery: number;
+  verifyInterval: number;
 }
 
-const USAGE = `usage: tsx2rs start [dir] [--port <port>] [--host <host>] [--workers <n|auto>] [--verify-every <n>]`;
+const USAGE = `usage: tsx2rs start [dir] [--port <port>] [--host <host>] [--workers <n|auto>] [--verify-every <n>] [--verify-interval <ms>]`;
 
 /**
  * The options in `argv` (after `start`), with `next start`'s defaults: the current folder, port
@@ -40,6 +42,7 @@ export function parse(argv: string[], env: Record<string, string | undefined>): 
       host: { type: "string", short: "H" },
       workers: { type: "string", short: "w" },
       "verify-every": { type: "string" },
+      "verify-interval": { type: "string" },
     },
   });
   if (positionals.length > 1) throw new Error(USAGE);
@@ -57,6 +60,7 @@ export function parse(argv: string[], env: Record<string, string | undefined>): 
     workers:
       values.workers === "auto" ? availableParallelism() : number("workers", values.workers, 1, 1),
     verifyEvery: number("verify-every", values["verify-every"], VERIFY_EVERY, 0),
+    verifyInterval: number("verify-interval", values["verify-interval"], VERIFY_INTERVAL, 0),
   };
 }
 
@@ -80,6 +84,7 @@ export async function run(options: StartOptions): Promise<void> {
     port: options.port,
     host: options.host,
     verifyEvery: options.verifyEvery,
+    verifyInterval: options.verifyInterval,
   });
   if (options.workers === 1) {
     console.log(`tsx2rs: listening on http://${options.host}:${String(options.port)}`);
