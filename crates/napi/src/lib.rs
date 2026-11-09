@@ -4,13 +4,15 @@
 //! compiler or engine, map errors. Every export uses `catch_unwind`, so a Rust panic becomes
 //! a JavaScript exception instead of aborting the process (ARCHITECTURE.md invariant 6).
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 
-use napi::bindgen_prelude::Buffer;
+use napi::bindgen_prelude::{AsyncTask, Buffer};
+use napi::{Env, Task};
 use napi_derive::napi;
 use tsx2rs_compiler::build::{self, Outcome};
-use tsx2rs_engine::{Output, flight_script, render, script_string};
+use tsx2rs_engine::{Gzip, Output, flight_script, render, script_string};
 
 /// The tsx2rs version of this native binary.
 #[napi(catch_unwind)]
@@ -105,6 +107,42 @@ pub fn compile_app(root: String, pages: Vec<String>) -> App {
         routes,
         modules: app.modules.into_iter().collect(),
     }
+}
+
+thread_local! {
+    /// Each pool thread's compressor, kept between documents (`tsx2rs_engine::Gzip`).
+    static GZIP: RefCell<Gzip> = RefCell::new(Gzip::new());
+}
+
+/// Compressing a document on libuv's thread pool, as Node.js's own zlib streams do.
+#[allow(missing_debug_implementations)] // holds napi `Buffer`s, which have no `Debug`
+pub struct GzipTask {
+    parts: Vec<Buffer>,
+}
+
+impl Task for GzipTask {
+    type Output = Vec<u8>;
+    type JsValue = Buffer;
+
+    fn compute(&mut self) -> napi::Result<Vec<u8>> {
+        let parts: Vec<&[u8]> = self.parts.iter().map(|p| &p[..]).collect();
+        let mut out = Vec::new();
+        GZIP.with_borrow_mut(|gzip| gzip.gzip(&parts, &mut out))
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        Ok(out)
+    }
+
+    fn resolve(&mut self, _env: Env, output: Vec<u8>) -> napi::Result<Buffer> {
+        Ok(output.into())
+    }
+}
+
+/// The gzip of `parts`, one after the other, as one document (ADR-0033): what Next.js's
+/// `compression` middleware sends a client that accepts gzip, compressed on the thread pool.
+#[napi(catch_unwind, ts_return_type = "Promise<Buffer>")]
+#[must_use]
+pub fn gzip(parts: Vec<Buffer>) -> AsyncTask<GzipTask> {
+    AsyncTask::new(GzipTask { parts })
 }
 
 /// A template program, decoded and validated once (`tsx2rs_ir::Program`), to render per request.
