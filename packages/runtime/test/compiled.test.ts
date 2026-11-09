@@ -3,7 +3,13 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { join } from "node:path";
 import { createGzip, gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { Route, type CompiledRoute, type Renderer, type Compress } from "../src/compiled.js";
+import {
+  Route,
+  fragments,
+  type CompiledRoute,
+  type Renderer,
+  type Compress,
+} from "../src/compiled.js";
 import { Decisions, decision, variant } from "../src/server.js";
 
 /** Real Next.js 16.4.5 documents for `app/q/[n]/page.tsx` (see test/next/README.md). */
@@ -492,5 +498,39 @@ describe("variants", () => {
     expect(await get("/q/1234567890123456789012345678901234567890")).toBe("compiled");
     expect(await get("/q/3", "cart=1")).toBeNull();
     server.close();
+  });
+});
+
+describe("a render's fragments (ADR-0031)", () => {
+  const out = {
+    html: Buffer.from("<main>é</main>"),
+    segments: Buffer.from("<div hidden>s</div>"),
+    flight: Buffer.from('["$","main",null,{"children":"$L!1"}]'),
+    rows: [Buffer.from('["$","p",null,{"a":"$!0:props"}]')],
+  };
+
+  it("are bytes to serve, and strings with the rows' ids to learn from", () => {
+    const [page, segments, row] = fragments(out, ["0", "a"]);
+    expect([page?.name, segments?.name, row?.name]).toEqual(["page", "segments", "row:1"]);
+    expect(page?.html).toBe("<main>é</main>");
+    expect(page?.flight).toBe('["$","main",null,{"children":"$La"}]');
+    expect(page?.bytes?.html).toBe(out.html);
+    expect(page?.bytes?.script.toString()).toBe(
+      String.raw`[\"$\",\"main\",null,{\"children\":\"$La\"}]`,
+    );
+    expect(row?.flight).toBe('["$","p",null,{"a":"$0:props"}]');
+    expect(row?.html).toBe("");
+    expect(row?.bytes?.script.toString()).toBe(String.raw`[\"$\",\"p\",null,{\"a\":\"$0:props\"}]`);
+    // Segments have HTML only.
+    expect(segments?.html).toBe("<div hidden>s</div>");
+    expect(segments?.flight).toBe("");
+    expect(segments?.bytes?.script.length).toBe(0);
+  });
+
+  it("keep placeholders without ids, and have no segments when there are none", () => {
+    const [page, row] = fragments({ ...out, segments: Buffer.alloc(0) }, undefined);
+    expect(row?.name).toBe("row:1");
+    expect(page?.flight).toContain('"$L!1"');
+    expect(page?.bytes?.script.toString()).toContain(String.raw`\"$L!1\"`);
   });
 });

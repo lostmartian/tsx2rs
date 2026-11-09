@@ -23,7 +23,7 @@ pub use head::Head;
 pub use hints::Hints;
 pub use outline::{OutlineError, outline};
 pub use render::{MAX_VALUE_DEPTH, Mark, Output, render};
-pub use script::script_string;
+pub use script::{flight_script, script_string};
 
 /// Why a render failed. The input is checked as it is read; a program is valid by construction
 /// ([`tsx2rs_ir::Program::new`]).

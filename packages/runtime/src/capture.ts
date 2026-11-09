@@ -36,6 +36,17 @@ export interface Fragment {
   html: string;
   /** Its Flight row's value (after `id:`), found once among the Flight rows. */
   flight: string;
+  /**
+   * The same as bytes, as they go into the response: the HTML, and the Flight row escaped as it
+   * goes in a `<script>` (ADR-0031). Without them, `fill` encodes the strings.
+   */
+  bytes?: Bytes;
+}
+
+/** A fragment's HTML (UTF-8), and its Flight row as it goes in a `<script>`. */
+export interface Bytes {
+  html: Buffer;
+  script: Buffer;
 }
 
 /** What a template is filled with. */
@@ -43,7 +54,7 @@ export interface Values {
   params: Record<string, string>;
   pathname: string;
   search: string;
-  fragments: Record<string, { html: string; flight: string }>;
+  fragments: Record<string, { html: string; flight: string; bytes?: Bytes }>;
 }
 
 /** How a param's value is written where it appears. */
@@ -367,20 +378,21 @@ function piece(part: Part, values: Values): string {
 }
 
 /**
- * The document for `values`. A param whose candidates no response has confirmed can only take
- * the value the template was learned with; for another, the result is an error (the runtime
- * then serves the request through Next.js).
+ * The document for `values`, as bytes (ADR-0031). A param whose candidates no response has
+ * confirmed can only take the value the template was learned with; for another, the result is an
+ * error (the runtime then serves the request through Next.js).
  */
-export function fill(template: Template, values: Values): string {
-  let out = "";
+export function fill(template: Template, values: Values): Buffer {
+  const out: Buffer[] = [];
   for (const unit of template.units) {
     // A unit without slots is the same every time: encoded once.
     const fixed = FIXED.get(unit);
     if (fixed !== undefined) {
-      out += fixed;
+      out.push(fixed);
       continue;
     }
-    let text = "";
+    const pieces: Buffer[] = [];
+    if (unit.kind === "flight") pieces.push(opening(unit));
     for (const part of unit.parts) {
       if (
         "candidate" in part &&
@@ -389,33 +401,71 @@ export function fill(template: Template, values: Values): string {
         throw new Error(`param ${part.candidate} isn't confirmed for another value yet`);
       }
       // Flight units are escaped part by part (JSON escaping concatenates): fixed parts once.
-      text += unit.kind === "html" ? piece(part, values) : escaped(part, values);
+      pieces.push(unit.kind === "html" ? html(part, values) : escaped(part, values));
     }
-    const encoded =
-      unit.kind === "html" ? text : `${unit.start}self.__next_f.push([1,"${text}"])</script>`;
-    if (unit.parts.every((part) => "text" in part)) FIXED.set(unit, encoded);
-    out += encoded;
+    if (unit.kind === "flight") pieces.push(CLOSING);
+    if (unit.parts.every((part) => "text" in part)) {
+      const whole = Buffer.concat(pieces);
+      FIXED.set(unit, whole);
+      out.push(whole);
+    } else {
+      out.push(...pieces);
+    }
   }
-  return out;
+  return Buffer.concat(out);
+}
+
+/** An HTML part's bytes: a fragment's as rendered, a fixed part's kept. */
+function html(part: Part, values: Values): Buffer {
+  if ("text" in part) return kept(TEXT, part, () => part.text);
+  if ("fragment" in part) {
+    const fragment = values.fragments[part.fragment];
+    if (fragment?.bytes) return fragment.bytes.html;
+    if (fragment) return kept(FRAGMENT_HTML, fragment, () => fragment.html);
+  }
+  return Buffer.from(piece(part, values));
 }
 
 /**
- * A Flight part's text escaped as `flightScript` escapes the chunk it's in: the body of a JSON
+ * A Flight part's bytes escaped as `flightScript` escapes the chunk it's in: the body of a JSON
  * string, then `htmlEscapeJsonString`. Parts are whole strings (located verbatim), so the pieces
- * join to the escaped whole. A fixed part's is kept.
+ * join to the escaped whole. A fragment's comes escaped from the engine; a fixed part's is kept.
  */
-function escaped(part: Part, values: Values): string {
-  const known = ESCAPED.get(part);
-  if (known !== undefined) return known;
-  const out = htmlEscapeJson(JSON.stringify(piece(part, values)).slice(1, -1));
-  if ("text" in part) ESCAPED.set(part, out);
-  return out;
+function escaped(part: Part, values: Values): Buffer {
+  const script = (text: string) => htmlEscapeJson(JSON.stringify(text).slice(1, -1));
+  if ("text" in part) return kept(ESCAPED, part, () => script(part.text));
+  if ("fragment" in part && part.as === "flight") {
+    const fragment = values.fragments[part.fragment];
+    if (fragment?.bytes) return fragment.bytes.script;
+    if (fragment) return kept(FRAGMENT_SCRIPT, fragment, () => script(fragment.flight));
+  }
+  return Buffer.from(script(piece(part, values)));
 }
 
-const ESCAPED = new WeakMap<Part, string>();
+/** `text()` as bytes, encoded once per `key` (template parts and fragments don't change). */
+function kept<K extends object>(cache: WeakMap<K, Buffer>, key: K, text: () => string): Buffer {
+  let bytes = cache.get(key);
+  if (bytes === undefined) {
+    bytes = Buffer.from(text());
+    cache.set(key, bytes);
+  }
+  return bytes;
+}
+
+/** A Flight unit's script start, up to its chunk. */
+function opening(unit: Unit & { kind: "flight" }): Buffer {
+  return kept(OPENINGS, unit, () => `${unit.start}self.__next_f.push([1,"`);
+}
+
+const CLOSING = Buffer.from('"])</script>');
+const OPENINGS = new WeakMap<Unit, Buffer>();
+const TEXT = new WeakMap<Part, Buffer>();
+const ESCAPED = new WeakMap<Part, Buffer>();
+const FRAGMENT_HTML = new WeakMap<object, Buffer>();
+const FRAGMENT_SCRIPT = new WeakMap<object, Buffer>();
 
 /** Template units without slots, as written (a template's units don't change once learned). */
-const FIXED = new WeakMap<Unit, string>();
+const FIXED = new WeakMap<Unit, Buffer>();
 
 /** The names of the fragments a template is filled with. */
 export function fragmentNames(template: Template): Set<string> {
