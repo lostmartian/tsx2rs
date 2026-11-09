@@ -35,11 +35,17 @@ export class NotNative extends Error {
   }
 }
 
-const encoder = new TextEncoder();
+/**
+ * Where the next input's buffer starts: the size the last one needed, so a page's input is
+ * written without growing (between 4 KiB and 1 MiB).
+ */
+let nextSize = 4096;
 
 /** The engine's input, written in program order. */
 export class Input {
-  private buffer = new Uint8Array(256);
+  // A Node `Buffer` of its own (not from the shared pool), written without zeroing first: only
+  // what's written is read.
+  private buffer = Buffer.allocUnsafeSlow(nextSize);
   private view = new DataView(this.buffer.buffer);
   private length = 0;
 
@@ -47,8 +53,8 @@ export class Input {
     if (this.length + n <= this.buffer.length) return;
     let size = this.buffer.length * 2;
     while (size < this.length + n) size *= 2;
-    const next = new Uint8Array(size);
-    next.set(this.buffer.subarray(0, this.length));
+    const next = Buffer.allocUnsafeSlow(size);
+    this.buffer.copy(next, 0, 0, this.length);
     this.buffer = next;
     this.view = new DataView(next.buffer);
   }
@@ -94,16 +100,32 @@ export class Input {
   string(s: string): void {
     // At most 3 bytes per UTF-16 unit.
     this.reserve(4 + s.length * 3);
-    const { written } = encoder.encodeInto(s, this.buffer.subarray(this.length + 4));
+    const start = this.length + 4;
+    const buffer = this.buffer;
+    // Most strings on a page are short and ASCII: written here, without a native call.
+    let i = 0;
+    if (s.length <= SHORT) {
+      for (; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        if (c >= 0x80) break;
+        buffer[start + i] = c;
+      }
+    }
+    // Lone surrogates become U+FFFD, as `TextEncoder` writes them.
+    const written = i === s.length ? i : buffer.write(s, start, "utf8");
     this.view.setUint32(this.length, written, true);
-    this.length += 4 + written;
+    this.length = start + written;
   }
 
-  /** The bytes written. */
+  /** The bytes written. The input can't be written to after. */
   finish(): Uint8Array {
-    return this.buffer.slice(0, this.length);
+    nextSize = Math.min(Math.max(this.length, 4096), 1 << 20);
+    return this.buffer.subarray(0, this.length);
   }
 }
+
+/** Strings this long or shorter are tried as ASCII first. */
+const SHORT = 24;
 
 /** A tagged primitive (`Op::Prop`): what React DOM writes as an attribute value. */
 export function primitive(w: Input, v: unknown): void {

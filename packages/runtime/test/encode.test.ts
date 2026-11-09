@@ -113,6 +113,27 @@ describe("Input", () => {
     ).toHaveLength(1200);
   });
 
+  it("writes every kind of string as TextEncoder does, around the ASCII fast path", () => {
+    const surrogate = String.fromCharCode(0xd800);
+    const strings = [
+      "",
+      "a",
+      "x".repeat(24), // the longest tried as ASCII first
+      "x".repeat(25),
+      `${"x".repeat(23)}é`, // non-ASCII last
+      "é",
+      `a${surrogate}b`,
+      "😀 ✓ café",
+      String.fromCharCode(0x7f, 0x80),
+      "y".repeat(5000), // grows the buffer
+    ];
+    expect(
+      bytes((w) => {
+        for (const s of strings) w.string(s);
+      }),
+    ).toEqual(strings.flatMap(str));
+  });
+
   it("writes lone surrogates as U+FFFD, as UTF-8 requires", () => {
     expect(
       bytes((w) => {
