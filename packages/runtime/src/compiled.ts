@@ -32,7 +32,7 @@ import { join } from "node:path";
 import { Duplex } from "node:stream";
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import { pathToFileURL } from "node:url";
-import { Program, flightScripts } from "@tsx2rs/native";
+import { Program, flightScripts, gzip } from "@tsx2rs/native";
 import {
   confirm,
   confirmed,
@@ -406,6 +406,25 @@ export class Route {
         });
         return;
       }
+      const headers: Record<string, string | string[]> = {
+        ...variant.head.headers,
+        "x-tsx2rs": "compiled",
+      };
+      // The usual gzip request: compressed by the engine, off the main thread (ADR-0033).
+      if (
+        this.compress &&
+        req.method !== "HEAD" &&
+        gzipsLikeNext(req.headers["accept-encoding"], headers, body.length)
+      ) {
+        const zipped = await gzip([body]);
+        res.writeHead(variant.head.status, {
+          ...headers,
+          vary: withVary(headers["vary"]),
+          "content-encoding": "gzip",
+        });
+        res.end(zipped);
+        return;
+      }
       // Next.js's middleware compresses only for a client that accepts an encoding.
       const encodings = req.headers["accept-encoding"] ?? "";
       if (this.compress && /gzip|br|deflate|\*/.test(encodings)) {
@@ -416,7 +435,7 @@ export class Route {
           if (!res.writableFinished) release(res);
         });
       }
-      res.writeHead(variant.head.status, { ...variant.head.headers, "x-tsx2rs": "compiled" });
+      res.writeHead(variant.head.status, headers);
       res.end(req.method === "HEAD" ? undefined : body);
       return;
     }
@@ -459,6 +478,49 @@ export class Route {
       );
     });
   }
+}
+
+/**
+ * Whether Next.js's `compression` middleware (`next/dist/compiled/compression`, 16.4.5) would gzip
+ * a document `length` bytes long with these response `headers`, for a client that sent
+ * `acceptEncoding`, in the cases tsx2rs compresses itself (ADR-0033): an `Accept-Encoding` list
+ * without weights that names gzip (as browsers send), an HTML document of at least the
+ * middleware's 1 KiB threshold, not already encoded, no `no-transform`. Anything else is `false`
+ * and goes through the middleware itself. The caller checks the method (not `HEAD`).
+ */
+export function gzipsLikeNext(
+  acceptEncoding: string | string[] | undefined,
+  headers: Record<string, string | string[]>,
+  length: number,
+): boolean {
+  if (typeof acceptEncoding !== "string" || acceptEncoding.includes(";")) return false;
+  const header = (name: string) => {
+    const value = headers[name];
+    return Array.isArray(value) ? value.join(", ") : (value ?? "");
+  };
+  return (
+    length >= 1024 &&
+    /^\s*text\/html\s*(;|$)/i.test(header("content-type")) &&
+    !/(?:^|,)\s*?no-transform\s*?(?:,|$)/.test(header("cache-control")) &&
+    header("content-encoding") === "" &&
+    acceptEncoding.split(",").some((token) => token.trim().toLowerCase() === "gzip")
+  );
+}
+
+/**
+ * A `Vary` header with `Accept-Encoding` in it, as the middleware's `vary` adds it: kept if it's
+ * `*` or names it already (in any case), appended otherwise.
+ */
+export function withVary(vary: string | string[] | undefined): string {
+  const value = Array.isArray(vary) ? vary.join(", ") : (vary ?? "");
+  const fields = value
+    .toLowerCase()
+    .split(",")
+    .map((field) => field.trim())
+    .filter((field) => field !== "");
+  if (fields.includes("*")) return "*";
+  if (fields.includes("accept-encoding")) return value;
+  return value === "" ? "Accept-Encoding" : `${value}, Accept-Encoding`;
 }
 
 /**

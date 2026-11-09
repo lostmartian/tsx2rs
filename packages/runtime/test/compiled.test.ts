@@ -1,12 +1,21 @@
 import { readFileSync } from "node:fs";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  createServer,
+  request,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
+import { createRequire } from "node:module";
 import { join } from "node:path";
-import { createGzip, gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync, inflateSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   Rechecks,
   Route,
   fragments,
+  gzipsLikeNext,
+  withVary,
   type CompiledRoute,
   type Renderer,
   type Compress,
@@ -309,44 +318,109 @@ describe("a compiled route's refusals", () => {
   });
 });
 
-describe("a served route's compression", () => {
-  it("compresses as Next.js's middleware does, when it's on", async () => {
-    let used = 0;
-    // A stand-in for Next.js's `compression` middleware: gzips what the route writes.
-    const compress: Compress = (_req, res) => {
-      used++;
-      const gzip = createGzip();
-      const end = res.end.bind(res);
-      const chunks: Buffer[] = [];
-      gzip.on("data", (c: Buffer) => chunks.push(c));
-      gzip.on("end", () => {
-        end(Buffer.concat(chunks));
-      });
-      res.setHeader("content-encoding", "gzip");
-      res.end = ((body?: unknown) => {
-        if (body) gzip.end(body as string);
-        else gzip.end();
-        return res;
-      }) as typeof res.end;
-    };
-    const route = new Route(definition, page, compress);
-    const { server, url } = await serve(route);
-    await (await fetch(`${url}/q/3`)).text();
-    await (await fetch(`${url}/q/7`)).text();
-    const res = await fetch(`${url}/q/1234567890123456789012345678901234567890`, {
-      headers: { "accept-encoding": "gzip" },
+describe("a served route's compression (ADR-0033)", () => {
+  /** Next.js's own `compression` middleware, as `next start` applies it. */
+  const real = (
+    createRequire(import.meta.url)("next/dist/compiled/compression") as () => Compress
+  )();
+
+  /** Sends `headers` and `body` through `compress`, as raw bytes and headers. */
+  function raw(url: string, path: string, acceptEncoding: string, method = "GET") {
+    return new Promise<{ headers: Record<string, unknown>; body: Buffer }>((resolve, reject) => {
+      const req = request(
+        `${url}${path}`,
+        { method, headers: { "accept-encoding": acceptEncoding } },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () => {
+            resolve({ headers: res.headers, body: Buffer.concat(chunks) });
+          });
+        },
+      );
+      req.on("error", reject);
+      req.end();
     });
-    expect(used).toBe(1);
-    expect(res.headers.get("x-tsx2rs")).toBe("compiled");
-    // fetch decodes the gzip itself.
-    expect(res.headers.get("content-encoding")).toBe("gzip");
-    expect(await res.text()).toBe(docs["1234567890123456789012345678901234567890"]);
-    // A client that accepts no encoding: Next.js's middleware wouldn't compress, so it isn't used.
-    const plain = await fetch(`${url}/q/3`, { headers: { "accept-encoding": "identity" } });
-    expect(await plain.text()).toBe(docs["3"]);
-    expect(plain.headers.get("content-encoding")).toBeNull();
-    expect(used).toBe(1);
-    server.close();
+  }
+
+  const decoded = (r: { headers: Record<string, unknown>; body: Buffer }) =>
+    (r.headers["content-encoding"] === "gzip"
+      ? gunzipSync(r.body)
+      : r.headers["content-encoding"] === "deflate"
+        ? inflateSync(r.body)
+        : r.body
+    ).toString();
+
+  it("sends what Next.js's middleware sends, for every kind of Accept-Encoding", async () => {
+    const route = new Route(definition, page, real);
+    const ours = await serve(route);
+    // The middleware alone, writing the same document with the headers the route learned.
+    const doc = docs["1234567890123456789012345678901234567890"] ?? "";
+    const theirs = createServer((req, res) => {
+      real(req, res, () => undefined);
+      res.writeHead(200, { ...HEADERS, "x-tsx2rs": "compiled" });
+      res.end(doc);
+    });
+    await new Promise<void>((resolve) => theirs.listen(0, "127.0.0.1", resolve));
+    const address = theirs.address();
+    const url = `http://127.0.0.1:${String(typeof address === "object" && address ? address.port : 0)}`;
+    const path = "/q/1234567890123456789012345678901234567890";
+    // Learn and confirm the route first.
+    for (const p of ["/q/3", "/q/7", path]) await raw(ours.url, p, "identity");
+    const cases = [
+      "gzip",
+      "gzip, deflate, br",
+      "gzip, deflate, br, zstd",
+      "br, gzip",
+      "deflate, gzip",
+      "GZIP",
+      "deflate",
+      "identity",
+      "",
+      "*",
+      "gzip;q=0.5, identity",
+      "identity;q=1, gzip;q=0.5",
+      "gzip;q=0",
+      "br",
+    ];
+    for (const acceptEncoding of cases) {
+      for (const method of ["GET", "HEAD"]) {
+        const a = await raw(ours.url, path, acceptEncoding, method);
+        const b = await raw(url, path, acceptEncoding, method);
+        const label = `${method} ${acceptEncoding}`;
+        expect(a.headers["x-tsx2rs"], label).toBe("compiled");
+        expect(a.headers["content-encoding"], label).toBe(b.headers["content-encoding"]);
+        expect(a.headers["vary"], label).toBe(b.headers["vary"]);
+        expect(decoded(a), label).toBe(decoded(b));
+        // Which compressed it: the engine's gzip header says OS "unknown" (255); zlib's doesn't.
+        if (a.headers["content-encoding"] === "gzip") {
+          // Only an explicit gzip without weights goes to the engine (`*` stays with the middleware).
+          const engine =
+            method === "GET" && !acceptEncoding.includes(";") && /gzip/i.test(acceptEncoding);
+          expect(a.body[9] === 255, label).toBe(engine);
+        }
+      }
+    }
+    ours.server.close();
+    theirs.close();
+  });
+
+  it("decides as the middleware does, and adds Vary as it does", () => {
+    const html = { "content-type": "text/html; charset=utf-8" };
+    expect(gzipsLikeNext("gzip, deflate, br", html, 2000)).toBe(true);
+    // Left to the middleware: weights, no gzip, small, not HTML, no-transform, already encoded.
+    expect(gzipsLikeNext("gzip;q=1", html, 2000)).toBe(false);
+    expect(gzipsLikeNext("deflate, br", html, 2000)).toBe(false);
+    expect(gzipsLikeNext(undefined, html, 2000)).toBe(false);
+    expect(gzipsLikeNext(["gzip"], html, 2000)).toBe(false);
+    expect(gzipsLikeNext("gzip", html, 1023)).toBe(false);
+    expect(gzipsLikeNext("gzip", { "content-type": "application/json" }, 2000)).toBe(false);
+    expect(gzipsLikeNext("gzip", { ...html, "cache-control": "no-transform" }, 2000)).toBe(false);
+    expect(gzipsLikeNext("gzip", { ...html, "content-encoding": "br" }, 2000)).toBe(false);
+    expect(withVary(undefined)).toBe("Accept-Encoding");
+    expect(withVary("rsc")).toBe("rsc, Accept-Encoding");
+    expect(withVary(["rsc", "accept-encoding"])).toBe("rsc, accept-encoding");
+    expect(withVary("*")).toBe("*");
   });
 });
 

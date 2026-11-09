@@ -9,6 +9,7 @@
 
 mod flight;
 pub mod fold;
+mod gzip;
 mod head;
 mod hints;
 mod html;
@@ -19,6 +20,7 @@ mod render;
 mod script;
 mod style;
 
+pub use gzip::{Gzip, GzipError};
 pub use head::Head;
 pub use hints::Hints;
 pub use outline::{OutlineError, outline};

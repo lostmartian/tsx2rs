@@ -7,6 +7,7 @@
 export {
   compileApp,
   flightScripts,
+  gzip,
   Program,
   programFormatVersion,
   version,
