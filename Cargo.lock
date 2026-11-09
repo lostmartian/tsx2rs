@@ -1865,6 +1865,7 @@ version = "0.0.0"
 dependencies = [
  "criterion",
  "gungraun",
+ "memchr",
  "proptest",
  "ryu-js",
  "thiserror",

@@ -26,7 +26,7 @@ pub struct Output {
     /// escaped for a `<script>` (see [`crate::script_string`]).
     pub flight: Vec<u8>,
     /// Where server components' outputs and identified objects start in [`Output::flight`], for
-    /// [`crate::outline`].
+    /// [`crate::outline()`].
     pub marks: Vec<(usize, Mark)>,
     /// What React DOM hoists into the document's `<head>` (ADR-0010). It accumulates across
     /// renders for one request, with React's deduplication.
