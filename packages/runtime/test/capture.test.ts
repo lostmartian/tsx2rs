@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { flightScripts } from "@tsx2rs/native";
 import { describe, expect, it } from "vitest";
 import { confirm, confirmed, fill, learn, type Sample, type Template } from "../src/capture.js";
 
@@ -58,7 +59,7 @@ const query = sample("q-3-query", "3", "?x=1&y=%3Cb%3E");
 
 describe("learn", () => {
   it("reproduces the response it learned from, byte for byte", () => {
-    expect(fill(learned(q3), values(q3))).toBe(q3.document);
+    expect(fill(learned(q3), values(q3)).toString()).toBe(q3.document);
   });
 
   it("can't fill other param values until a response confirms them", () => {
@@ -111,17 +112,35 @@ describe("confirm", () => {
     const result = confirm(learned(q3), q7);
     if (!result.ok) throw new Error(result.reason);
     expect(confirmed(result.template)).toBe(true);
-    expect(fill(result.template, values(q7))).toBe(q7.document);
-    expect(fill(result.template, values(q3))).toBe(q3.document);
+    expect(fill(result.template, values(q7)).toString()).toBe(q7.document);
+    expect(fill(result.template, values(q3)).toString()).toBe(q3.document);
     // Never seen: another length, and characters that are escaped where they appear.
-    expect(fill(result.template, values(long))).toBe(long.document);
-    expect(fill(result.template, values(escaped))).toBe(escaped.document);
+    expect(fill(result.template, values(long)).toString()).toBe(long.document);
+    expect(fill(result.template, values(escaped)).toString()).toBe(escaped.document);
+  });
+
+  it("fills the same bytes from fragments the engine gives as bytes (ADR-0031)", () => {
+    const result = confirm(learned(q3), q7);
+    if (!result.ok) throw new Error(result.reason);
+    // Characters both HTML and the Flight script escape, and some that aren't escaped.
+    const tricky = { ...page("7"), html: "<p>a&amp;b é ✓</p>", flight: '["</script>&",\u2028"é"]' };
+    const asBytes = {
+      ...tricky,
+      bytes: {
+        html: Buffer.from(tricky.html),
+        script: flightScripts([Buffer.from(tricky.flight)])[0] ?? Buffer.alloc(0),
+      },
+    };
+    const filled = (fragment: typeof tricky) =>
+      fill(result.template, { ...values(q7), fragments: { page: fragment } });
+    expect(filled(asBytes).equals(filled(tricky))).toBe(true);
+    expect(filled(asBytes).toString()).toContain("\\u003c/script\\u003e\\u0026");
   });
 
   it("fills the URL, query string included, where Next.js's router state has it", () => {
     const result = confirm(learned(q3), q7);
     if (!result.ok) throw new Error(result.reason);
-    expect(fill(result.template, values(query))).toBe(query.document);
+    expect(fill(result.template, values(query)).toString()).toBe(query.document);
   });
 
   it("keeps a candidate when the other response has the same value", () => {
@@ -194,7 +213,7 @@ describe("on documents shaped like Next.js's", () => {
     const result = confirm(template, synthetic(`a<b>&"c'\u2028`));
     if (!result.ok) throw new Error(result.reason);
     for (const p of [`x&amp;y`, `<script>`, "\u2029'\""]) {
-      expect(fill(result.template, values(synthetic(p)))).toBe(synthetic(p).document);
+      expect(fill(result.template, values(synthetic(p))).toString()).toBe(synthetic(p).document);
     }
   });
 
@@ -202,7 +221,7 @@ describe("on documents shaped like Next.js's", () => {
     // "1" is also in `"h":16`; with "16" as the other value, only backtracking tells them apart.
     const result = confirm(learned(synthetic("1")), synthetic("16"));
     if (!result.ok) throw new Error(result.reason);
-    expect(fill(result.template, values(synthetic("7")))).toBe(synthetic("7").document);
+    expect(fill(result.template, values(synthetic("7"))).toString()).toBe(synthetic("7").document);
   });
 
   it("refuses a response without the router state's URL", () => {

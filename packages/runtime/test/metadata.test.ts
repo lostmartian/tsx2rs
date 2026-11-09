@@ -78,9 +78,9 @@ describe("metadata in the captured wrapper", () => {
     if (!learned.ok) throw new Error(learned.reason);
     expect(fragmentNames(learned.template)).toEqual(new Set(["metadata"]));
     const values = { params: {}, pathname: "/about", search: "", fragments: { metadata: about } };
-    expect(fill(learned.template, values)).toBe(doc("about"));
+    expect(fill(learned.template, values).toString()).toBe(doc("about"));
     // Another request's metadata goes in the same places, in HTML and in Flight.
-    const other = fill(learned.template, { ...values, fragments: { metadata: terms } });
+    const other = fill(learned.template, { ...values, fragments: { metadata: terms } }).toString();
     expect(other).toContain(terms.html);
     expect(other).not.toContain(about.html);
   });

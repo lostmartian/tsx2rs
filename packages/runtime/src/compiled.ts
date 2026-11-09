@@ -31,7 +31,7 @@ import { join } from "node:path";
 import { Duplex } from "node:stream";
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import { pathToFileURL } from "node:url";
-import { Program } from "@tsx2rs/native";
+import { Program, flightScripts } from "@tsx2rs/native";
 import {
   confirm,
   confirmed,
@@ -388,7 +388,7 @@ export class Route {
         await tee(req, res, next, (response) => {
           if (response.status !== variant.head?.status) return;
           this.checks.compared++;
-          if (response.body === body) return;
+          if (body.equals(Buffer.from(response.body))) return;
           this.checks.differed++;
           this.islands.forget(url);
           this.metadata.forget(url);
@@ -503,22 +503,65 @@ export function renderer(route: CompiledRoute, dir: string, manifestDir: string)
     // Async when the page has an async component (ADR-0025).
     const input = await encode(record, callees, parts?.islands, parts?.boundaries);
     const out = program.render(Buffer.from(input.buffer, input.byteOffset, input.byteLength));
-    // The rows the page defers to (ADR-0025), with the ids Next.js gave them, or placeholders
-    // while they're learned.
-    // References to rows or to objects written before need the rows' ids (ADR-0025, ADR-0026).
-    const placeholders = [out.flight, ...out.rows].some((row) => /"\$L?!/.test(row));
-    if (placeholders && !parts) throw new Error("the page's Flight rows need their ids");
-    const ids = placeholders ? parts?.rows(out.rows.length) : [];
-    const fix = (row: string) => (ids === undefined ? row : withIds(row, ids));
     if (out.head !== "" || out.hints !== "") {
       throw new Error("the page hoists into <head> (not yet served by tsx2rs)");
     }
-    return [
-      { name: "page", html: out.html, flight: fix(out.flight) },
-      ...(out.segments === "" ? [] : [{ name: "segments", html: out.segments, flight: "" }]),
-      ...out.rows.map((row, i) => ({ name: `row:${String(i + 1)}`, html: "", flight: fix(row) })),
-    ];
+    // The page's row, then the rows it defers to (ADR-0025), with the ids Next.js gave them, or
+    // placeholders while they're learned. References to rows or to objects written before need
+    // the rows' ids (ADR-0025, ADR-0026).
+    const rows = [out.flight, ...out.rows];
+    const placeholders = rows.some((row) => row.includes('"$L!') || row.includes('"$!'));
+    if (placeholders && !parts) throw new Error("the page's Flight rows need their ids");
+    const ids = placeholders ? parts?.rows(out.rows.length) : undefined;
+    return fragments(out, ids);
   };
+}
+
+const EMPTY = Buffer.alloc(0);
+
+/** What the engine renders for a page, as bytes (the napi `Rendered`). */
+export interface RenderedBytes {
+  html: Buffer;
+  segments: Buffer;
+  flight: Buffer;
+  rows: Buffer[];
+}
+
+/**
+ * A render's fragments: the page, its segments if any, and the rows it defers to, with `ids` put
+ * in their placeholders (or kept, without). Served as bytes, the rows escaped for their scripts
+ * by the engine the first time a response needs them; as strings only when read, for learning
+ * and re-checks (ADR-0031).
+ */
+export function fragments(out: RenderedBytes, ids: string[] | undefined): Fragment[] {
+  const rows = [out.flight, ...out.rows];
+  let scripts: Buffer[] | undefined;
+  const script = (row: number) => (scripts ??= flightScripts(rows, ids))[row] ?? EMPTY;
+  const text = (row: number) => {
+    const value = rows[row]?.toString() ?? "";
+    return ids === undefined ? value : withIds(value, ids);
+  };
+  const fragment = (name: string, html: Buffer, row?: number): Fragment => {
+    let htmlText: string | undefined;
+    let flightText: string | undefined;
+    return {
+      name,
+      get html() {
+        return (htmlText ??= html.toString());
+      },
+      get flight() {
+        return row === undefined ? "" : (flightText ??= text(row));
+      },
+      get bytes() {
+        return { html, script: row === undefined ? EMPTY : script(row) };
+      },
+    };
+  };
+  return [
+    fragment("page", out.html, 0),
+    ...(out.segments.length === 0 ? [] : [fragment("segments", out.segments)]),
+    ...out.rows.map((_, i) => fragment(`row:${String(i + 1)}`, EMPTY, i + 1)),
+  ];
 }
 
 /** Next.js's `compression` middleware for the app in `dir`, as `next start` applies it. */
