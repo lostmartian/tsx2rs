@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Input, node, primitive } from "@tsx2rs/runtime/encode";
 import { afterAll, describe, expect, it } from "vitest";
-import { compileApp, Program } from "../src/index.js";
+import { compileApp, flightScripts, Program } from "../src/index.js";
 
 const root = mkdtempSync(join(tmpdir(), "tsx2rs-program-"));
 afterAll(() => {
@@ -41,9 +41,10 @@ function input(x: unknown): Buffer {
 describe("Program", () => {
   it("renders a compiled program's HTML, Flight, head and hints", () => {
     const out = program.render(input("<hi>"));
-    expect(out.html).toBe('<p class="a">&lt;hi&gt;<img src="/i.png"/></p>');
+    // Bytes (ADR-0031).
+    expect(out.html.toString()).toBe('<p class="a">&lt;hi&gt;<img src="/i.png"/></p>');
     // The Flight model, not yet escaped for a <script>.
-    expect(out.flight).toBe(
+    expect(out.flight.toString()).toBe(
       '["$","p",null,{"className":"a","children":["<hi>",["$","img",null,{"src":"/i.png"}]]}]',
     );
     // React DOM preloads the image in <head>, and React's Flight server hints it.
@@ -52,8 +53,26 @@ describe("Program", () => {
   });
 
   it("is reusable across renders", () => {
-    expect(program.render(input(1)).html).toBe('<p class="a">1<img src="/i.png"/></p>');
-    expect(program.render(input(2)).html).toBe('<p class="a">2<img src="/i.png"/></p>');
+    expect(program.render(input(1)).html.toString()).toBe('<p class="a">1<img src="/i.png"/></p>');
+    expect(program.render(input(2)).html.toString()).toBe('<p class="a">2<img src="/i.png"/></p>');
+  });
+
+  it("escapes rows for their scripts as Next.js does, with the rows' ids put in", () => {
+    const [page, row] = flightScripts(
+      [Buffer.from('["$L!1",{"a":"$!1:props"},"</script>&"]'), Buffer.from('"$$L!1"')],
+      ["", "2a"],
+    );
+    // `<`, `>` and `&` as `\` + `u003c` and so on.
+    const u = (hex: string) => `${String.fromCharCode(92)}u${hex}`;
+    expect(page?.toString()).toBe(
+      String.raw`[\"$L2a\",{\"a\":\"$2a:props\"},\"` +
+        `${u("003c")}/script${u("003e")}${u("0026")}` +
+        String.raw`\"]`,
+    );
+    // A string written with React's `$` escape isn't a placeholder.
+    expect(row?.toString()).toBe(String.raw`\"$$L!1\"`);
+    // Without ids, placeholders stay.
+    expect(flightScripts([Buffer.from('"$L!1"')])[0]?.toString()).toBe(String.raw`\"$L!1\"`);
   });
 
   it("throws, never crashes, on a bad program or input", () => {

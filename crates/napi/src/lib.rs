@@ -10,7 +10,7 @@ use std::path::Path;
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 use tsx2rs_compiler::build::{self, Outcome};
-use tsx2rs_engine::{Output, render};
+use tsx2rs_engine::{Output, flight_script, render, script_string};
 
 /// The tsx2rs version of this native binary.
 #[napi(catch_unwind)]
@@ -114,24 +114,53 @@ pub struct TemplateProgram {
     program: tsx2rs_ir::Program,
 }
 
-/// What a render wrote (`tsx2rs_engine::Output`).
+/// What a render wrote (`tsx2rs_engine::Output`). The page's parts are bytes (UTF-8), handed to
+/// JavaScript without a copy, as the response is written as bytes (ADR-0031).
 #[napi(object)]
-#[derive(Debug)]
+#[allow(missing_debug_implementations)] // holds napi `Buffer`s, which have no `Debug`
 pub struct Rendered {
     /// The HTML.
-    pub html: String,
+    pub html: Buffer,
     /// The HTML of pending `<Suspense>` boundaries' content, which React sends after the shell.
-    pub segments: String,
+    pub segments: Buffer,
     /// The Flight model of the page's own row, not yet escaped for a `<script>`.
-    pub flight: String,
+    pub flight: Buffer,
     /// The rows React defers parts of the page to (ADR-0025), in React's task order. A reference
     /// to one is written `"$L!<n>"`, `n` counting from 1, for the runtime to replace with the id
     /// Next.js gave it.
-    pub rows: Vec<String>,
+    pub rows: Vec<Buffer>,
     /// What React DOM hoists into `<head>`, in its order (empty if nothing).
     pub head: String,
     /// The Flight resource hint rows (`:HL`, `:Hm`), which go before the Flight rows.
     pub hints: String,
+}
+
+/// Each of a page's Flight rows (the page's own first, as [`TemplateProgram::render`] returns
+/// them) as it goes in a `<script>` (`tsx2rs_engine::flight_script`): escaped as Next.js escapes a
+/// Flight chunk, with `ids` (the id Next.js gave each row, the page's at 0) put in place of the
+/// rows' placeholders. Without `ids`, the placeholders stay.
+///
+/// # Errors
+///
+/// If a row isn't UTF-8.
+#[napi(catch_unwind)]
+#[allow(clippy::needless_pass_by_value)] // napi-rs passes JavaScript arguments by value
+pub fn flight_scripts(rows: Vec<Buffer>, ids: Option<Vec<String>>) -> napi::Result<Vec<Buffer>> {
+    let ids: Option<Vec<&str>> = ids
+        .as_ref()
+        .map(|ids| ids.iter().map(String::as_str).collect());
+    rows.iter()
+        .map(|row| {
+            let row = std::str::from_utf8(row)
+                .map_err(|e| napi::Error::from_reason(format!("a row isn't UTF-8: {e}")))?;
+            let mut out = Vec::new();
+            match &ids {
+                Some(ids) => flight_script(&mut out, row, ids),
+                None => script_string(&mut out, row),
+            }
+            Ok(out.into())
+        })
+        .collect()
 }
 
 #[napi]
@@ -171,11 +200,17 @@ impl TemplateProgram {
             String::from_utf8(bytes)
                 .map_err(|e| napi::Error::from_reason(format!("not UTF-8: {e}")))
         };
+        // Bytes, checked to be UTF-8 (cheap next to making JavaScript strings of them).
+        let bytes = |bytes: Vec<u8>| {
+            std::str::from_utf8(&bytes)
+                .map_err(|e| napi::Error::from_reason(format!("not UTF-8: {e}")))?;
+            Ok::<_, napi::Error>(Buffer::from(bytes))
+        };
         Ok(Rendered {
-            html: text(output.html)?,
-            segments: text(output.segments)?,
-            flight: text(flight)?,
-            rows: rows.map(text).collect::<napi::Result<_>>()?,
+            html: bytes(output.html)?,
+            segments: bytes(output.segments)?,
+            flight: bytes(flight)?,
+            rows: rows.map(bytes).collect::<napi::Result<_>>()?,
             head: text(head)?,
             hints: text(output.hints.rows().to_vec())?,
         })
