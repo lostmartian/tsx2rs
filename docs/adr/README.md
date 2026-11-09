@@ -38,5 +38,6 @@ Format: [MADR](https://adr.github.io/madr/)-style. Context → Decision → Cons
 | [0030](0030-streaming-outline.md) | Flight rows are split in one streaming pass | Accepted |
 | [0031](0031-byte-responses.md) | Compiled responses are assembled and written as bytes | Accepted |
 | [0032](0032-recheck-interval.md) | Re-checks are limited in time as well as by count | Accepted |
+| [0033](0033-engine-gzip.md) | The engine gzips served pages for the usual gzip request | Accepted |
 
 Background research (benchmarks, spikes, the full decision history before this repository existed) lives in the separate `tsx2rs-lab` repository.
