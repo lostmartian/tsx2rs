@@ -36,5 +36,6 @@ Format: [MADR](https://adr.github.io/madr/)-style. Context → Decision → Cons
 | [0028](0028-tsx2rs-start.md) | `tsx2rs start` runs the app, with a worker per core when asked | Accepted |
 | [0029](0029-memoized-formatters.md) | Data functions memoize `Intl` formatters | Accepted |
 | [0030](0030-streaming-outline.md) | Flight rows are split in one streaming pass | Accepted |
+| [0031](0031-byte-responses.md) | Compiled responses are assembled and written as bytes | Accepted |
 
 Background research (benchmarks, spikes, the full decision history before this repository existed) lives in the separate `tsx2rs-lab` repository.
