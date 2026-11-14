@@ -113,8 +113,8 @@ importers:
   packages/runtime:
     dependencies:
       '@next/routing':
-        specifier: 16.4.5
-        version: 16.4.5
+        specifier: 16.4.6
+        version: 16.4.6
       '@tsx2rs/native':
         specifier: workspace:*
         version: link:../native
@@ -1193,8 +1193,8 @@ packages:
   '@next/env@16.4.5':
     resolution: {integrity: sha512-JwSPwpdkZL5VMl2jA/q+JI8MZdweAL3xmw5/tb9y/TLtmS0YXZnmYDzSihwk8xTj1OL+WM53gTqaj96yuLp6Xw==}
 
-  '@next/routing@16.4.5':
-    resolution: {integrity: sha512-5cR/AKkAr/WpfYKxdlDpOmxtNGo/4Ad+6Mr1aRzOzSb37jEM9Xffh3fSFyMlqFh/yiMw7ehbktZk41V2m6hZpQ==}
+  '@next/routing@16.4.6':
+    resolution: {integrity: sha512-25HxdlDhz37j9R50L1ULMtjzw3ybqQP4dQTr5L2FgEVD6y7LBAJrPmz1javAHj+gyKABb/FMWYPPkyU0xHsp5w==}
 
   '@next/swc-darwin-arm64@16.4.5':
     resolution: {integrity: sha512-W5TniBzWKASbNNwHZ/S/f1MxQUXU/LdjklVMWA0Ujbfl7SZnUzFls45hO0i/sF7Bx1jJBWp7WWmoQajXtX/O8A==}
@@ -3721,7 +3721,7 @@ snapshots:
 
   '@next/env@16.4.5': {}
 
-  '@next/routing@16.4.5': {}
+  '@next/routing@16.4.6': {}
 
   '@next/swc-darwin-arm64@16.4.5':
     optional: true
