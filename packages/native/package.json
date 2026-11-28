@@ -21,7 +21,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@napi-rs/cli": "3.10.12",
+    "@napi-rs/cli": "3.11.1",
     "@tsx2rs/runtime": "workspace:*"
   }
 }
